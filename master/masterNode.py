@@ -80,8 +80,10 @@ class MasterNode(Node):
             self.occ_callback,
             qos_profile_sensor_data)
         self.occ_subscription  # prevent unused variable warning
-        self.occdata = np.array([])
+        self.occmap = np.array([])
         self.yaw = 0
+        self.map_resolution = 0.05
+        self.map_w = self.map_h = 0
 
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
@@ -90,6 +92,7 @@ class MasterNode(Node):
             'position',
             self.pos_callback,
             10)
+        self.pos_y = self.pos_x = self.yaw = 0
 
         ''' ================================================ cmd_linear ================================================ '''
         # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
@@ -162,6 +165,7 @@ class MasterNode(Node):
                 self.linear_publisher.publish(0)
                 break
             time.sleep(0.5)
+        self.get_logger().info('finished moving')
 
     def find_path_to(self, tx, ty):
         ok = [[True for x in range(self.map_w)] for y in range(self.max_h)]  # True if robot can go to that cell
@@ -218,19 +222,29 @@ class MasterNode(Node):
         for i in range(1, len(path)):
             self.move_to(path[i][0], path[i][1])
 
+    def readKey(self):
+        try:
+            while True:
+                rclpy.spin_once(self)
+
+                x, y = map(int, input("target x and y coordinates: ").split())
+
+                self.move_straight_to(x, y)
+
+        except Exception as e:
+            print(e)
+
+        # Ctrl-c detected
+        finally:
+            self.linear_publisher.publish(0)
+
 
 
 def main(args=None):
     rclpy.init(args=args)
 
     master_node = MasterNode()
-
-    try:
-        rclpy.spin(master_node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        master_node.destroy_node()
+    master_node.readKey()
 
 
 if __name__ == '__main__':
