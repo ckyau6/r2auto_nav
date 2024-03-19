@@ -9,6 +9,7 @@ from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
 import math
+import heapq
 
 
 # return the rotation angle around z axis in degrees (counterclockwise)
@@ -126,19 +127,19 @@ class MasterNode(Node):
         # log the info
         # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
 
-        # make msgdata go from 0 instead of -1, reshape into 2D
-        oc2 = msgdata + 1
         # reshape to 2D array using column order
         # self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width,order='F'))
-        self.occdata = np.uint8(oc2.reshape(msg.info.height, msg.info.width))
+        self.occmap = np.uint8(msgdata.reshape(msg.info.height, msg.info.width))
         # print to file
         # np.savetxt(mapfile, self.occdata)
-        self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
+        self.map_resolution = msg.info.resolution  # according to experiment, should be 0.05 m
+        self.map_w = msg.info.width
+        self.map_h = msg.info.height
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
-        self.pos_x = msg.position.x
-        self.pos_y = msg.position.y
+        self.pos_x = int(msg.position.x)
+        self.pos_y = int(msg.position.y)
         # in degrees (not radians)
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
@@ -146,18 +147,76 @@ class MasterNode(Node):
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.pos_y, tx - self.pos_x) * (180 / math.pi)
+        self.get_logger().info('currently at (%d %d), moving straight to (%d, %d), target_yaw: %f' % (self.pos_x, self.pos_y, tx, ty, target_yaw))
         self.angle_publisher.publish(target_yaw - self.yaw)
         while True:
+            rclpy.spin_once(self)
             if abs(target_yaw - self.yaw) < 5:
                 break
             time.sleep(0.5)
         self.linear_publisher.publish(1)
         while True:
+            rclpy.spin_once(self)
             distance = math.sqrt((tx - self.pos_x) ** 2 + (ty - self.pos_y) ** 2)
             if distance < 5:
                 self.linear_publisher.publish(0)
                 break
             time.sleep(0.5)
+
+    def find_path_to(self, tx, ty):
+        ok = [[True for x in range(self.map_w)] for y in range(self.max_h)]  # True if robot can go to that cell
+        robot_radius = 3
+        occupied_threshold = 50
+        for y in range(self.max_h):
+            for x in range(self.max_w):
+                for i in range(y - robot_radius, y + robot_radius + 1):
+                    for j in range(x - robot_radius, x + robot_radius + 1):
+                        if 0 <= i < self.map_h and 0 <= j < self.map_w and self.occmap[i][j] >= occupied_threshold:
+                            ok[i][j] = False
+        sx = self.pos_x
+        sy = self.pos_y
+        dist = [[1e18 for x in range(self.max_w)] for y in range(self.max_h)]
+        pre = [[(0, 0) for x in range(self.max_w)] for y in range(self.max_h)]
+        dist[sy][sx] = 0
+        pq = []
+        heapq.heappush(pq, (0, sy, sx))
+        dx = [0, 0, 1, -1]
+        dy = [1, -1, 0, 0]
+        while pq:
+            d, y, x = heapq.heappop(pq)
+            if d > d[y][x] + 0.001:
+                continue
+            if y == ty and x == tx:
+                break
+            for k in range(4):
+                ny, nx = y, x
+                nd = d + 3  # for taking rotation time into account, magical constant
+                while True:
+                    ny += dy[k]
+                    nx += dx[k]
+                    nd += 1
+                    if ny < 0 or ny >= self.map_h or nx < 0 or nx >= self.map_w:
+                        break
+                    if not ok[ny][nx]:
+                        break
+                    if dist[ny][nx] > nd:
+                        dist[ny][nx] = nd
+                        pre[ny][nx] = (y, x)
+                        heapq.heappush(pq, (nd, ny, nx))
+        res = []
+        while True:
+            res.append((tx, ty))
+            if ty == sy and tx == sx:
+                break
+            ty, tx = pre[ty][tx]
+        return res
+
+    def move_to(self, tx, ty):
+        self.get_logger().info('currently at (%d %d), moving to (%d, %d)' % (self.pos_x, self.pos_y, tx, ty))
+        path = self.find_path_to(tx, ty)
+        self.get_logger().info('path finding finished')
+        for i in range(1, len(path)):
+            self.move_to(path[i][0], path[i][1])
 
 
 
