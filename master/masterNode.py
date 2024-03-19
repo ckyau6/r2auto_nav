@@ -97,10 +97,13 @@ class MasterNode(Node):
         ''' ================================================ cmd_linear ================================================ '''
         # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
         self.linear_publisher = self.create_publisher(UInt8, 'cmd_linear', 10)
+        self.move_command = 1
+        self.stop_command = 0
 
         ''' ================================================ cmd_angle ================================================ '''
         # Create a publisher to the topic "cmd_angle", which can rotate the robot
         self.angle_publisher = self.create_publisher(Float64, 'cmd_angle', 10)
+        self.angle_to_publish = 0
 
         self.get_logger().info("MasterNode has started, bitchesss! >:D")
 
@@ -151,18 +154,19 @@ class MasterNode(Node):
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.pos_y, tx - self.pos_x) * (180 / math.pi)
         self.get_logger().info('currently at (%d %d), moving straight to (%d, %d), target_yaw: %f' % (self.pos_x, self.pos_y, tx, ty, target_yaw))
-        self.angle_publisher.publish(target_yaw - self.yaw)
+        self.angle_to_publish = target_yaw - self.yaw
+        self.angle_publisher.publish(self.angle_to_publish)
         while True:
             rclpy.spin_once(self)
-            if abs(target_yaw - self.yaw) < 5:
+            if abs(target_yaw - self.yaw) < 1:
                 break
             time.sleep(0.5)
-        self.linear_publisher.publish(1)
+        self.linear_publisher.publish(self.move_command)
         while True:
             rclpy.spin_once(self)
             distance = math.sqrt((tx - self.pos_x) ** 2 + (ty - self.pos_y) ** 2)
-            if distance < 5:
-                self.linear_publisher.publish(0)
+            if distance < 1.5:
+                self.linear_publisher.publish(self.stop_command)
                 break
             time.sleep(0.5)
         self.get_logger().info('finished moving')
@@ -236,7 +240,7 @@ class MasterNode(Node):
 
         # Ctrl-c detected
         finally:
-            self.linear_publisher.publish(0)
+            self.linear_publisher.publish(self.stop_command)
 
 
 
