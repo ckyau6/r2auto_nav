@@ -1,3 +1,5 @@
+import time
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -140,6 +142,22 @@ class MasterNode(Node):
         # in degrees (not radians)
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
+
+
+    def move_straight_to(self, tx, ty):
+        target_yaw = math.atan2(ty - self.pos_y, tx - self.pos_x) * (180 / math.pi)
+        self.angle_publisher.publish(target_yaw - self.yaw)
+        while True:
+            if abs(target_yaw - self.yaw) < 5:
+                break
+            time.sleep(0.5)
+        self.linear_publisher.publish(1)
+        while True:
+            distance = math.sqrt((tx - self.pos_x) ** 2 + (ty - self.pos_y) ** 2)
+            if distance < 5:
+                self.linear_publisher.publish(0)
+                break
+            time.sleep(0.5)
 
 
 
