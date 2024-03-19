@@ -7,6 +7,7 @@ from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
 import math
+import time
 
 
 # return the rotation angle around z axis in degrees (counterclockwise)
@@ -114,6 +115,14 @@ class MasterNode(Node):
         # replace 0's with nan
         self.laser_range[self.laser_range == 0] = np.nan
 
+        def angle_to_index(angle, array):
+            length = len(array)
+            return (angle / (360)) * (length - 1)
+        
+        self.f = self.laser_range[0]
+        self.l = self.laser_range[angle_to_index(45, self.laser_range)]
+        self.r = self.laser_range[angle_to_index(315, self.laser_range)]
+
     def occ_callback(self, msg):
         # create numpy array
         msgdata = np.array(msg.data)
@@ -141,20 +150,54 @@ class MasterNode(Node):
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
 
+    def wall_follow(self):
+        #Getting distance data
+        
+        d = 0.20
+        d_thres = 0.05
+
+        def search_for_wall():
+            self.linear_publisher.publish(1)
+            time.sleep(3)
+            self.angle_publisher.publish(-10)
+        
+        def turn_left():
+            self.angle_publisher.publish(20)
+
+        if self.l > d and self.f < d and self.r > d:
+            search_for_wall()
+        elif self.l < d and self.f > d and self.r > d:
+            turn_left()
+        elif self.l > d and self.f < d and self.r < d:
+            if self.f < d_thres: #If we change to lin + ang vel, change f to r
+                turn_left()
+            else:
+                self.linear_publisher.publish(1)
+        elif self.l < d and self.f > d and self.r > d:
+            search_for_wall()
+        elif self.l > d and self.f < d and self.r < d:
+            turn_left()
+        elif self.l < d and self.f < d and self.r > d:
+            turn_left()
+        elif self.l < d and self.f < d and self.r < d:
+            turn_left()
+        elif self.l < d and self.f > d and self.r < d:
+            search_for_wall()
+        else:
+            pass
+
+    def main(args=None):
+        rclpy.init(args=args)
+
+        master_node = MasterNode()
+
+        try:
+            rclpy.spin(master_node)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            master_node.destroy_node()
 
 
-def main(args=None):
-    rclpy.init(args=args)
-
-    master_node = MasterNode()
-
-    try:
-        rclpy.spin(master_node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        master_node.destroy_node()
-
-
-if __name__ == '__main__':
-    main()
+    if __name__ == '__main__':
+        main()
