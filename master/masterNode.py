@@ -199,43 +199,7 @@ class MasterNode(Node):
     def robotControlNode_state_feedback_callback(self, msg):
         self.robotControlNodeState = msg.data
         
-    def wall_follow(self):
-        #Getting distance data
-        self.get_logger().info("Wall Follow function started")
-        d = 0.20
-        d_thres = 0.05
-
-        def search_for_wall():
-            self.linear_publisher.publish(self.move_command)
-            time.sleep(3)
-            self.angle_to_publish.data = -10
-            self.angle_publisher.publish(self.angle_to_publish.data)
         
-        def turn_left():
-            self.angle_to_publish.data = 20
-            self.angle_publisher.publish(self.angle_to_publish.data)
-
-        if self.l > d and self.f < d and self.r > d:
-            search_for_wall()
-        elif self.l < d and self.f > d and self.r > d:
-            turn_left()
-        elif self.l > d and self.f < d and self.r < d:
-            if self.f < d_thres: #If we change to lin + ang vel, change f to r
-                turn_left()
-            else:
-                self.linear_publisher.publish(1)
-        elif self.l < d and self.f > d and self.r > d:
-            search_for_wall()
-        elif self.l > d and self.f < d and self.r < d:
-            turn_left()
-        elif self.l < d and self.f < d and self.r > d:
-            turn_left()
-        elif self.l < d and self.f < d and self.r < d:
-            turn_left()
-        elif self.l < d and self.f > d and self.r < d:
-            search_for_wall()
-        else:
-            pass        
     def fsmDebug_callback(self, msg):
         self.state = msg.data
         
@@ -246,6 +210,45 @@ class MasterNode(Node):
     def masterFSM(self):
         if self.state == "idle":
             pass
+
+        elif self.state == "wall_following":
+            self.get_logger().info("Wall Follow function started")
+            d = 0.20
+            d_thres = 0.05
+
+            def search_for_wall():
+                self.linear_publisher.publish(self.move_command)
+                time.sleep(3)
+                self.angle_to_publish.data = -10
+                self.angle_publisher.publish(self.angle_to_publish.data)
+            
+            def turn_left():
+                self.angle_to_publish.data = 20
+                self.angle_publisher.publish(self.angle_to_publish.data)
+
+            if self.l > d and self.f < d and self.r > d:
+                search_for_wall()
+            elif self.l < d and self.f > d and self.r > d:
+                turn_left()
+            elif self.l > d and self.f < d and self.r < d:
+                if self.f < d_thres: #If we change to lin + ang vel, change f to r
+                    turn_left()
+                else:
+                    self.linear_publisher.publish(1)
+            elif self.l < d and self.f > d and self.r > d:
+                search_for_wall()
+            elif self.l > d and self.f < d and self.r < d:
+                turn_left()
+            elif self.l < d and self.f < d and self.r > d:
+                turn_left()
+            elif self.l < d and self.f < d and self.r < d:
+                turn_left()
+            elif self.l < d and self.f > d and self.r < d:
+                search_for_wall()
+            else:
+                pass        
+
+
         # elif self.state == "checking_walls_distance":
         #     # lidar minimum is 12 cm send by node, datasheet says 16 cm
         #     # by experimentation need 30 cm
