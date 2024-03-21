@@ -146,11 +146,10 @@ class MasterNode(Node):
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
-        self.pos_x = int(msg.position.x)
-        self.pos_y = int(msg.position.y)
+        self.pos_x = int(msg.position.x / self.map_resolution)
+        self.pos_y = int(msg.position.y / self.map_resolution)
         # in degrees (not radians)
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
-        self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
 
 
     def move_straight_to(self, tx, ty):
@@ -160,18 +159,20 @@ class MasterNode(Node):
         self.angle_publisher.publish(self.angle_to_publish)
         while True:
             rclpy.spin_once(self)
-            if abs(target_yaw - self.yaw) < 1:
+            self.get_logger().info('current yaw: %d' % self.yaw)
+            if abs(target_yaw - self.yaw) <= 1:
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
         time.sleep(2)
+        self.get_logger().info('start moving forward')
         self.linear_publisher.publish(self.move_command)
         while True:
             rclpy.spin_once(self)
-            distance = math.sqrt((tx - self.pos_x) ** 2 + (ty - self.pos_y) ** 2)
-            if distance < 1.5:
+            self.get_logger().info('current position: %d %d' % (self.pos_x, self.pos_y))
+            if tx == self.pos_x and ty == self.pos_y:
                 self.linear_publisher.publish(self.stop_command)
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
         self.get_logger().info('finished moving')
 
     def find_path_to(self, tx, ty):
