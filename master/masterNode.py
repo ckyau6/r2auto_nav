@@ -198,10 +198,6 @@ class MasterNode(Node):
         
     def robotControlNode_state_feedback_callback(self, msg):
         self.robotControlNodeState = msg.data
-<<<<<<< HEAD
-        
-=======
->>>>>>> main
         
     def fsmDebug_callback(self, msg):
         self.state = msg.data
@@ -213,7 +209,6 @@ class MasterNode(Node):
     def masterFSM(self):
         if self.state == "idle":
             pass
-<<<<<<< HEAD
 
         elif self.state == "wall_following":
             self.get_logger().info("Wall Follow function started")
@@ -221,24 +216,21 @@ class MasterNode(Node):
             d_thres = 0.05
 
             def search_for_wall():
-                self.linear_publisher.publish(self.move_command)
-                time.sleep(3)
-                self.angle_to_publish.data = -10
-                self.angle_publisher.publish(self.angle_to_publish.data)
+                self.linear_publisher.publish(10)
+                self.anglularVel_publisher.publish(-10)
             
             def turn_left():
-                self.angle_to_publish.data = 20
-                self.angle_publisher.publish(self.angle_to_publish.data)
+                self.anglularVel_publisher.publish(30)
 
             if self.l > d and self.f < d and self.r > d:
                 search_for_wall()
             elif self.l < d and self.f > d and self.r > d:
                 turn_left()
             elif self.l > d and self.f < d and self.r < d:
-                if self.f < d_thres: #If we change to lin + ang vel, change f to r
+                if self.r < d_thres: 
                     turn_left()
                 else:
-                    self.linear_publisher.publish(1)
+                    self.linear_publisher.publish(10)
             elif self.l < d and self.f > d and self.r > d:
                 search_for_wall()
             elif self.l > d and self.f < d and self.r < d:
@@ -252,166 +244,6 @@ class MasterNode(Node):
             else:
                 pass        
 
-
-        # elif self.state == "checking_walls_distance":
-        #     # lidar minimum is 12 cm send by node, datasheet says 16 cm
-        #     # by experimentation need 30 cm
-        #     # if less than 30 cm from nearest object, move away from it, else can find the bucket using bucketFinderNode
-        #     # bucket finder doesnt work if its too close to wall
-        #     min_distance = min(self.laser_range)
-            
-        #     self.get_logger().info('min_distance %f' % min_distance)
-            
-        #     if min_distance < 0.3:
-        #         self.get_logger().info('too close! moving away')
-                
-        #         argmin = np.nanargmin(self.laser_range)
-        #         angle_min = self.index_to_angle(argmin, self.range_len)
-                
-        #         self.get_logger().info('angle_min %f' % angle_min)
-                
-        #     else:
-                
-                
-        #         # if the closest object is in not at the back of the robot, rotate first, else move away from it
-        #         if abs(angle_min - 180) > 5:
-        #             # set linear to be zero 
-        #             linear_msg = UInt8()
-        #             linear_msg.data = 0
-        #             self.linear_publisher.publish(linear_msg)
-                    
-        #             # angle_min > or < 180, the delta angle to move away from the object is still the same
-        #             angle_msg = Float64()
-        #             angle_msg.data = angle_min - 180.0
-        #             self.angle_publisher.publish(angle_msg)
-        #         else:
-        #             # move away until its more than 30 cm
-        #             # set linear to be 1 
-        #             linear_msg = UInt8()
-        #             linear_msg.data = 1
-        #             self.linear_publisher.publish(linear_msg)
-                    
-        #             # set delta angle = 0
-        #             angle_msg = Float64()
-        #             angle_msg.data = 0.0
-        #             self.angle_publisher.publish(angle_msg)
-                    
-                    
-                    
-        # elif self.state == "moving_away_from_walls":
-        # elif self.state == "locating_bucket":
-        #     self.get_logger().info('self.state %s' % self.state)
-
-        #     # lidar minimum is 12 cm send by node, datasheet says 16 cm
-        #     # by experimentation need 30 cm
-        #     # if less than 30 cm from nearest object, move away from it, else can find the bucket using bucketFinderNode
-        #     min_distance = min(self.laser_range)
-            
-        #     self.get_logger().info('min_distance %f' % min_distance)
-            
-        #     if min_distance < 0.3:
-        #         self.get_logger().info('too close! moving away')
-                
-        #         argmin = np.nanargmin(self.laser_range)
-        #         angle_min = self.index_to_angle(argmin, self.range_len)
-                
-        #         self.get_logger().info('angle_min %f' % angle_min)
-                
-        #         # if the closest object is in not at the back of the robot, rotate first, else move away from it
-        #         if abs(angle_min - 180) > 5:
-        #             # set linear to be zero 
-        #             linear_msg = UInt8()
-        #             linear_msg.data = 0
-        #             self.linear_publisher.publish(linear_msg)
-                    
-        #             # angle_min > or < 180, the delta angle to move away from the object is still the same
-        #             angle_msg = Float64()
-        #             angle_msg.data = angle_min - 180.0
-        #             self.angle_publisher.publish(angle_msg)
-        #         else:
-        #             # move away until its more than 30 cm
-        #             # set linear to be 1 
-        #             linear_msg = UInt8()
-        #             linear_msg.data = 1
-        #             self.linear_publisher.publish(linear_msg)
-                    
-        #             # set delta angle = 0
-        #             angle_msg = Float64()
-        #             angle_msg.data = 0.0
-        #             self.angle_publisher.publish(angle_msg)
-        #     else:
-        #         # robot is far enough away from everything to not cause false positive
-        #         self.get_logger().info('far away enough! go to rotating_to_bucket state')
-                
-        #         # set movement to zero
-        #         # set linear to be zero 
-        #         linear_msg = UInt8()
-        #         linear_msg.data = 0
-        #         self.linear_publisher.publish(linear_msg)
-                
-        #         # set delta angle = 0
-        #         angle_msg = Float64()
-        #         angle_msg.data = 0.0
-        #         self.angle_publisher.publish(angle_msg)
-                
-        #         # go to next state
-        #         self.state = "rotating_to_bucket"
-        # elif self.state == "rotating_to_bucket":
-        #     self.get_logger().info('self.state %s' % self.state)
-            
-        #     # if close to forward, go to next state, else allign to bucket first
-        #     if abs(self.bucketAngle) < 2:
-        #         self.get_logger().info('close enough, moving to bucket now')
-        #         self.state = "moving_to_bucket"
-                
-        #         # set movement to zero
-        #         # set linear to be zero 
-        #         linear_msg = UInt8()
-        #         linear_msg.data = 0
-        #         self.linear_publisher.publish(linear_msg)
-                
-        #         # set delta angle = 0
-        #         angle_msg = Float64()
-        #         angle_msg.data = 0.0
-        #         self.angle_publisher.publish(angle_msg)
-        #     else:
-        #         if self.bucketAngle < 180:
-        #             # set linear to be zero 
-        #             linear_msg = UInt8()
-        #             linear_msg.data = 0
-        #             self.linear_publisher.publish(linear_msg)
-                    
-        #             # set delta angle = bucketAngle
-        #             angle_msg = Float64()
-        #             angle_msg.data = self.bucketAngle * 1.0
-        #             self.angle_publisher.publish(angle_msg)
-        #         elif self.bucketAngle > 180:
-        #             # set linear to be zero 
-        #             linear_msg = UInt8()
-        #             linear_msg.data = 0
-        #             self.linear_publisher.publish(linear_msg)
-                    
-        #             # set delta angle = bucketAngle -360
-        #             angle_msg = Float64()
-        #             angle_msg.data = self.bucketAngle - 360.0
-        #             self.angle_publisher.publish(angle_msg)
-        #         else:
-        #             # the case where it is 180, turn 90 deg first
-        #             # set linear to be zero 
-        #             linear_msg = UInt8()
-        #             linear_msg.data = 0
-        #             self.linear_publisher.publish(linear_msg)
-                    
-        #             # set delta angle = 90
-        #             angle_msg = Float64()
-        #             angle_msg.data = 90.0
-        #             self.angle_publisher.publish(angle_msg)
-        # elif self.state == "moving_to_bucket":
-        #     pass
-        # elif self.state == "releasing":
-        #     pass
-=======
->>>>>>> main
         else:
             self.state = "idle"
 
