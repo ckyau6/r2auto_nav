@@ -97,13 +97,15 @@ class MasterNode(Node):
         ''' ================================================ cmd_linear ================================================ '''
         # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
         self.linear_publisher = self.create_publisher(UInt8, 'cmd_linear', 10)
-        self.move_command = 1
-        self.stop_command = 0
+        self.move_command = UInt8()
+        self.move_command.data = 1
+        self.stop_command = UInt8()
+        self.stop_command.data = 0
 
         ''' ================================================ cmd_angle ================================================ '''
         # Create a publisher to the topic "cmd_angle", which can rotate the robot
         self.angle_publisher = self.create_publisher(Float64, 'cmd_angle', 10)
-        self.angle_to_publish = 0
+        self.angle_to_publish = Float64()
 
         self.get_logger().info("MasterNode has started, bitchesss! >:D")
 
@@ -154,13 +156,14 @@ class MasterNode(Node):
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.pos_y, tx - self.pos_x) * (180 / math.pi)
         self.get_logger().info('currently at (%d %d), moving straight to (%d, %d), target_yaw: %f' % (self.pos_x, self.pos_y, tx, ty, target_yaw))
-        self.angle_to_publish = target_yaw - self.yaw
+        self.angle_to_publish.data = target_yaw - self.yaw
         self.angle_publisher.publish(self.angle_to_publish)
         while True:
             rclpy.spin_once(self)
             if abs(target_yaw - self.yaw) < 1:
                 break
             time.sleep(0.5)
+        time.sleep(2)
         self.linear_publisher.publish(self.move_command)
         while True:
             rclpy.spin_once(self)
@@ -172,19 +175,19 @@ class MasterNode(Node):
         self.get_logger().info('finished moving')
 
     def find_path_to(self, tx, ty):
-        ok = [[True for x in range(self.map_w)] for y in range(self.max_h)]  # True if robot can go to that cell
+        ok = [[True for x in range(self.map_w)] for y in range(self.map_h)]  # True if robot can go to that cell
         robot_radius = 3
         occupied_threshold = 50
-        for y in range(self.max_h):
-            for x in range(self.max_w):
+        for y in range(self.map_h):
+            for x in range(self.map_w):
                 for i in range(y - robot_radius, y + robot_radius + 1):
                     for j in range(x - robot_radius, x + robot_radius + 1):
                         if 0 <= i < self.map_h and 0 <= j < self.map_w and self.occmap[i][j] >= occupied_threshold:
                             ok[i][j] = False
         sx = self.pos_x
         sy = self.pos_y
-        dist = [[1e18 for x in range(self.max_w)] for y in range(self.max_h)]
-        pre = [[(0, 0) for x in range(self.max_w)] for y in range(self.max_h)]
+        dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
+        pre = [[(0, 0) for x in range(self.map_w)] for y in range(self.map_h)]
         dist[sy][sx] = 0
         pq = []
         heapq.heappush(pq, (0, sy, sx))
