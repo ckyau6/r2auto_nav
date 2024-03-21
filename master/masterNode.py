@@ -1,9 +1,8 @@
 import time
-
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import UInt8, Float64, String
+from std_msgs.msg import UInt8, UInt16, Float64, String, Int8
 from geometry_msgs.msg import Twist, Pose
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
@@ -72,6 +71,15 @@ class MasterNode(Node):
         self.scan_subscription  # prevent unused variable warning
         self.laser_range = np.array([])
 
+        ''' ================================================ bucket ================================================ '''
+        # Listens for the bucket angle
+        self.bucketAngle_subscription = self.create_subscription(
+            UInt16,
+            'bucketAngle',
+            self.bucketAngle_listener_callback,
+            10)
+        self.bucketAngle_subscription  # prevent unused variable warning
+
         ''' ================================================ occupancy map ================================================ '''
         # Create a subscriber to the topic "map"
         self.occ_subscription = self.create_subscription(
@@ -82,7 +90,7 @@ class MasterNode(Node):
         self.occ_subscription  # prevent unused variable warning
         self.occmap = np.array([])
         self.yaw = 0
-        self.map_resolution = 0.05
+        self.map_res = 0.05
         self.map_w = self.map_h = 0
 
         ''' ================================================ robot position ================================================ '''
@@ -96,16 +104,38 @@ class MasterNode(Node):
 
         ''' ================================================ cmd_linear ================================================ '''
         # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
-        self.linear_publisher = self.create_publisher(UInt8, 'cmd_linear', 10)
-        self.move_command = UInt8()
-        self.move_command.data = 1
-        self.stop_command = UInt8()
-        self.stop_command.data = 0
+        self.linear_publisher = self.create_publisher(Int8, 'cmd_linear', 10)
 
-        ''' ================================================ cmd_angle ================================================ '''
+        ''' ================================================ cmd_anglularVel ================================================ '''
         # Create a publisher to the topic "cmd_angle", which can rotate the robot
-        self.angle_publisher = self.create_publisher(Float64, 'cmd_angle', 10)
-        self.angle_to_publish = Float64()
+        self.anglularVel_publisher = self.create_publisher(Int8, 'cmd_anglularVel', 10)
+
+        ''' ================================================ cmd_deltaAngle ================================================ '''
+        # Create a publisher to the topic "cmd_angle", which can rotate the robot
+        self.deltaAngle_publisher = self.create_publisher(Float64, 'cmd_deltaAngle', 10)
+
+        ''' ================================================ robotControlNode_state_feedback ================================================ '''
+        # Create a subscriber to the robotControlNode_state_feedback
+        self.pos_subscription = self.create_subscription(
+            String,
+            'robotControlNode_state_feedback',
+            self.robotControlNode_state_feedback_callback,
+            10)
+
+        ''' ================================================ Master FSM ================================================ '''
+        self.state = "idle"
+        fsm_period = 0.1  # seconds
+        self.fsmTimer = self.create_timer(fsm_period, self.masterFSM)
+
+        self.closestAngle = 0
+
+        # Create a subscriber to the topic fsmDebug
+        # to inject state changes for debugging in RQT
+        self.pos_subscription = self.create_subscription(
+            String,
+            'fsmDebug',
+            self.fsmDebug_callback,
+            10)
 
         self.get_logger().info("MasterNode has started, bitchesss! >:D")
 
@@ -118,12 +148,22 @@ class MasterNode(Node):
         self.switchStatus = msg.data
 
     def scan_callback(self, msg):
-        # create numpy array
+        # create numpy array to store lidar data
         self.laser_range = np.array(msg.ranges)
-        # print to file
-        # np.savetxt(scanfile, self.laser_range)
-        # replace 0's with nan
-        self.laser_range[self.laser_range == 0] = np.nan
+
+        # read min and max range values
+        self.range_min = msg.range_min
+        self.range_max = msg.range_max
+
+        # replace out of range values with nan
+        self.laser_range[self.laser_range < self.range_min] = np.nan
+        self.laser_range[self.laser_range > self.range_max] = np.nan
+
+        # store the len since it changes
+        self.range_len = len(self.laser_range)
+
+    def bucketAngle_listener_callback(self, msg):
+        self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
         # create numpy array
@@ -150,7 +190,23 @@ class MasterNode(Node):
         self.pos_y = int(msg.position.y / self.map_resolution)
         # in degrees (not radians)
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
+        self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
 
+    def robotControlNode_state_feedback_callback(self, msg):
+        self.robotControlNodeState = msg.data
+
+    def fsmDebug_callback(self, msg):
+        self.state = msg.data
+
+    def index_to_angle(self, index, arrLen):
+        # return in degrees
+        return (index / (arrLen - 1)) * 359
+
+    def masterFSM(self):
+        if self.state == "idle":
+            pass
+        else:
+            self.state = "idle"
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.pos_y, tx - self.pos_x) * (180 / math.pi)
@@ -230,29 +286,19 @@ class MasterNode(Node):
         for i in range(1, len(path)):
             self.move_to(path[i][0], path[i][1])
 
-    def readKey(self):
-        try:
-            while True:
-                rclpy.spin_once(self)
-
-                x, y = map(int, input("target x and y coordinates: ").split())
-
-                self.move_straight_to(x, y)
-
-        except Exception as e:
-            print(e)
-
-        # Ctrl-c detected
-        finally:
-            self.linear_publisher.publish(self.stop_command)
-
 
 
 def main(args=None):
     rclpy.init(args=args)
 
     master_node = MasterNode()
-    master_node.readKey()
+
+    try:
+        rclpy.spin(master_node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        master_node.destroy_node()
 
 
 if __name__ == '__main__':
