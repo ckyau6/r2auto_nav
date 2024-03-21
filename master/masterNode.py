@@ -92,11 +92,16 @@ class MasterNode(Node):
         ''' ================================================ cmd_linear ================================================ '''
         # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
         self.linear_publisher = self.create_publisher(UInt8, 'cmd_linear', 10)
+        self.move_command = UInt8()
+        self.move_command.data = 1
+        self.stop_command = UInt8()
+        self.stop_command.data = 0
 
         ''' ================================================ cmd_angle ================================================ '''
         # Create a publisher to the topic "cmd_angle", which can rotate the robot
         self.angle_publisher = self.create_publisher(Float64, 'cmd_angle', 10)
-
+        self.angle_to_publish = Float64()
+        
         self.get_logger().info("MasterNode has started, bitchesss! >:D")
 
     def http_listener_callback(self, msg):
@@ -117,7 +122,7 @@ class MasterNode(Node):
 
         def angle_to_index(angle, array):
             length = len(array)
-            return (angle / (360)) * (length - 1)
+            return int((angle / (360)) * (length - 1))
         
         self.f = self.laser_range[0]
         self.l = self.laser_range[angle_to_index(45, self.laser_range)]
@@ -152,17 +157,19 @@ class MasterNode(Node):
 
     def wall_follow(self):
         #Getting distance data
-        
+        self.get_logger().info("Wall Follow function started")
         d = 0.20
         d_thres = 0.05
 
         def search_for_wall():
-            self.linear_publisher.publish(1)
+            self.linear_publisher.publish(self.move_command)
             time.sleep(3)
-            self.angle_publisher.publish(-10)
+            self.angle_to_publish.data = -10
+            self.angle_publisher.publish(self.angle_to_publish.data)
         
         def turn_left():
-            self.angle_publisher.publish(20)
+            self.angle_to_publish.data = 20
+            self.angle_publisher.publish(self.angle_to_publish.data)
 
         if self.l > d and self.f < d and self.r > d:
             search_for_wall()
@@ -186,18 +193,19 @@ class MasterNode(Node):
         else:
             pass
 
-    def main(args=None):
-        rclpy.init(args=args)
+def main(args=None):
+    rclpy.init(args=args)
 
-        master_node = MasterNode()
+    master_node = MasterNode()
 
-        try:
-            rclpy.spin(master_node)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            master_node.destroy_node()
+    try:
+        rclpy.spin(master_node)
+        master_node.wall_follow()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        master_node.destroy_node()
 
 
-    if __name__ == '__main__':
-        main()
+if __name__ == '__main__':
+    main()
