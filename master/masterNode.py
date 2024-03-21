@@ -104,11 +104,11 @@ class MasterNode(Node):
 
         ''' ================================================ cmd_anglularVel ================================================ '''
         # Create a publisher to the topic "cmd_angle", which can rotate the robot
-        self.angle_publisher = self.create_publisher(Int8, 'cmd_anglularVel', 10)
+        self.anglularVel_publisher = self.create_publisher(Int8, 'cmd_anglularVel', 10)
         
         ''' ================================================ cmd_deltaAngle ================================================ '''
         # Create a publisher to the topic "cmd_angle", which can rotate the robot
-        self.angle_publisher = self.create_publisher(Float64, 'cmd_deltaAngle', 10)
+        self.deltaAngle_publisher = self.create_publisher(Float64, 'cmd_deltaAngle', 10)
         
         ''' ================================================ robotControlNode_state_feedback ================================================ '''
         # Create a subscriber to the robotControlNode_state_feedback
@@ -198,7 +198,10 @@ class MasterNode(Node):
         
     def robotControlNode_state_feedback_callback(self, msg):
         self.robotControlNodeState = msg.data
+<<<<<<< HEAD
         
+=======
+>>>>>>> main
         
     def fsmDebug_callback(self, msg):
         self.state = msg.data
@@ -210,6 +213,7 @@ class MasterNode(Node):
     def masterFSM(self):
         if self.state == "idle":
             pass
+<<<<<<< HEAD
 
         elif self.state == "wall_following":
             self.get_logger().info("Wall Follow function started")
@@ -406,6 +410,8 @@ class MasterNode(Node):
         #     pass
         # elif self.state == "releasing":
         #     pass
+=======
+>>>>>>> main
         else:
             self.state = "idle"
 
