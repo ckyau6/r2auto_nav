@@ -196,6 +196,9 @@ class MasterNode(Node):
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
         
+    def robotControlNode_state_feedback_callback(self, msg):
+        self.robotControlNodeState = msg.data
+        
     def wall_follow(self):
         #Getting distance data
         self.get_logger().info("Wall Follow function started")
