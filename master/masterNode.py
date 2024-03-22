@@ -232,7 +232,7 @@ class MasterNode(Node):
         elif self.state == "wall_following":
             d = 0.4
             d_thres = 0.2
-            d_toofar = 0.6
+            #d_toofar = 0.6
             
             self.f = self.laser_range[0]
             self.l = self.laser_range[self.angle_to_index(45, self.laser_range)]
@@ -240,12 +240,12 @@ class MasterNode(Node):
             self.dr = self.laser_range[self.angle_to_index(270, self.laser_range)]
 
             #self.get_logger().info(str(self.f))
-            if self.dr > d_toofar:
+            '''if self.dr > d_toofar:
                 del3 = Float64()
                 del3.data = -90.0
                 self.deltaAngle_publisher.publish(del3)
-                self.get_logger().info('extreme case')
-            elif self.l > d and self.f > d and self.r > d:
+                self.get_logger().info('extreme case')'''
+            if self.l > d and self.f > d and self.r > d:
                 self.search_for_wall()
                 self.get_logger().info('1 search for wall')
             elif self.l > d and self.f < d and self.r > d:
