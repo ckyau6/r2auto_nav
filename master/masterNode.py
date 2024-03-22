@@ -204,22 +204,22 @@ class MasterNode(Node):
         return (index / (arrLen - 1)) * 359
     
     def search_for_wall(self):
-        vel1 = Int8()
-        vel1.data = 20
-        self.linear_publisher.publish(vel1)
-        idk = Int8()
-        idk.data = -5
-        self.anglularVel_publisher.publish(idk)
-        self.get_logger().info('searching for wall')
+        lin_vel1 = Int8()
+        lin_vel1.data = 50
+        self.linear_publisher.publish(lin_vel1)
+        ang_vel1 = Int8()
+        ang_vel1.data = -30
+        self.anglularVel_publisher.publish(ang_vel1)
+        #self.get_logger().info('searching for wall')
     
     def turn_left(self):
-        vel3 = Int8()
-        vel3.data = 0
-        self.linear_publisher.publish(vel3)
-        vel = Int8()
-        vel.data = 30
-        self.anglularVel_publisher.publish(vel)
-        self.get_logger().info('turning left')
+        lin_vel2 = Int8()
+        lin_vel2.data = 30
+        self.linear_publisher.publish(lin_vel2)
+        ang_vel2 = Int8()
+        ang_vel2.data = 60
+        self.anglularVel_publisher.publish(ang_vel2)
+        #self.get_logger().info('turning left')
     
     def angle_to_index(self, angle, array):
         length = len(array)
@@ -230,44 +230,59 @@ class MasterNode(Node):
             pass
 
         elif self.state == "wall_following":
-            d = 0.2
-            d_thres = 0.10
+            d = 0.6
+            d_thres = 0.3
             
             self.f = self.laser_range[0]
             self.l = self.laser_range[self.angle_to_index(45, self.laser_range)]
             self.r = self.laser_range[self.angle_to_index(315, self.laser_range)]
 
             #self.get_logger().info(str(self.f))
-            if self.l > d and self.f < d and self.r > d:
+            if self.l > d and self.f > d and self.r > d:
                 self.search_for_wall()
-                #self.get_logger().info('1')
-            elif self.l < d and self.f > d and self.r > d:
+                self.get_logger().info('1 search for wall')
+            elif self.l > d and self.f < d and self.r > d:
                 self.turn_left()
-                #self.get_logger().info('2')
-            elif self.l > d and self.f < d and self.r < d:
+                self.get_logger().info('2 slow down n turn left')
+            elif self.l > d and self.f > d and self.r < d:
                 if self.r < d_thres: 
-                    self.turn_left()
-                    #self.get_logger().info('3')
+                    lin_vel3 = Int8()
+                    lin_vel3.data = 60
+                    self.linear_publisher.publish(lin_vel3)
+                    ang_vel3 = Int8()
+                    ang_vel3.data = 50
+                    self.anglularVel_publisher.publish(ang_vel3)
+                    self.get_logger().info('3 dont hit right wall')
+            
                 else:
-                    vel2 = Int8()
-                    vel2.data = 20
-                    self.linear_publisher.publish(vel2)
-                    #self.get_logger().info('4')
+                    lin_vel4 = Int8()
+                    lin_vel4.data = 100
+                    self.linear_publisher.publish(lin_vel4)
+                    ang_vel4 = Int8()
+                    ang_vel4.data = 0
+                    self.anglularVel_publisher.publish(ang_vel4)
+                    self.get_logger().info('4 go straighttt')
+    
             elif self.l < d and self.f > d and self.r > d:
                 self.search_for_wall()
-                #self.get_logger().info('5')
+                self.get_logger().info('5 search for wall')
             elif self.l > d and self.f < d and self.r < d:
                 self.turn_left()
-                #self.get_logger().info('6')
+                self.get_logger().info('6 slow down n turn left')
             elif self.l < d and self.f < d and self.r > d:
                 self.turn_left()
-                #self.get_logger().info('7')
+                self.get_logger().info('7 slow down n turn left')
             elif self.l < d and self.f < d and self.r < d:
                 self.turn_left()
-                #self.get_logger().info('8')
-                #pass
+                self.get_logger().info('8 slow down n turn left')
             elif self.l < d and self.f > d and self.r < d:
-                self.search_for_wall()
+                lin_vel4 = Int8()
+                lin_vel4.data = 100
+                self.linear_publisher.publish(lin_vel4)
+                ang_vel4 = Int8()
+                ang_vel4.data = 0
+                self.anglularVel_publisher.publish(ang_vel4)
+                self.get_logger().info('9 go straighttt')
                 #self.get_logger().info('9')
             else:
                 pass        
