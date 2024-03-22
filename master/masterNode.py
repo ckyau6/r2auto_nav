@@ -208,7 +208,7 @@ class MasterNode(Node):
         lin_vel1.data = 50
         self.linear_publisher.publish(lin_vel1)
         ang_vel1 = Int8()
-        ang_vel1.data = -30
+        ang_vel1.data = -25
         self.anglularVel_publisher.publish(ang_vel1)
         #self.get_logger().info('searching for wall')
     
@@ -230,15 +230,22 @@ class MasterNode(Node):
             pass
 
         elif self.state == "wall_following":
-            d = 0.6
-            d_thres = 0.3
+            d = 0.4
+            d_thres = 0.2
+            d_toofar = 0.6
             
             self.f = self.laser_range[0]
             self.l = self.laser_range[self.angle_to_index(45, self.laser_range)]
             self.r = self.laser_range[self.angle_to_index(315, self.laser_range)]
+            self.dr = self.laser_range[self.angle_to_index(270, self.laser_range)]
 
             #self.get_logger().info(str(self.f))
-            if self.l > d and self.f > d and self.r > d:
+            if self.dr > d_toofar:
+                del3 = Float64()
+                del3.data = -90.0
+                self.deltaAngle_publisher.publish(del3)
+                self.get_logger().info('extreme case')
+            elif self.l > d and self.f > d and self.r > d:
                 self.search_for_wall()
                 self.get_logger().info('1 search for wall')
             elif self.l > d and self.f < d and self.r > d:
@@ -247,10 +254,10 @@ class MasterNode(Node):
             elif self.l > d and self.f > d and self.r < d:
                 if self.r < d_thres: 
                     lin_vel3 = Int8()
-                    lin_vel3.data = 60
+                    lin_vel3.data = 20
                     self.linear_publisher.publish(lin_vel3)
                     ang_vel3 = Int8()
-                    ang_vel3.data = 50
+                    ang_vel3.data = 40
                     self.anglularVel_publisher.publish(ang_vel3)
                     self.get_logger().info('3 dont hit right wall')
             
