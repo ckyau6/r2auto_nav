@@ -20,6 +20,9 @@ def angle_from_quaternion(x, y, z, w):
 class MasterNode(Node):
     def __init__(self):
         super().__init__('masterNode')
+        self.f = 0
+        self.l = 0
+        self.r = 0
 
         ''' ================================================ http request ================================================ '''
         # Create a subscriber to the topic "doorStatus"
@@ -161,13 +164,7 @@ class MasterNode(Node):
     def bucketAngle_listener_callback(self, msg):
         self.bucketAngle = msg.data
 
-        def angle_to_index(angle, array):
-            length = len(array)
-            return int((angle / (360)) * (length - 1))
         
-        self.f = self.laser_range[0]
-        self.l = self.laser_range[angle_to_index(45, self.laser_range)]
-        self.r = self.laser_range[angle_to_index(315, self.laser_range)]
 
     def occ_callback(self, msg):
         # create numpy array
@@ -206,41 +203,72 @@ class MasterNode(Node):
         # return in degrees
         return (index / (arrLen - 1)) * 359
     
+    def search_for_wall(self):
+        vel1 = Int8()
+        vel1.data = 20
+        self.linear_publisher.publish(vel1)
+        idk = Int8()
+        idk.data = -5
+        self.anglularVel_publisher.publish(idk)
+        self.get_logger().info('searching for wall')
+    
+    def turn_left(self):
+        vel3 = Int8()
+        vel3.data = 0
+        self.linear_publisher.publish(vel3)
+        vel = Int8()
+        vel.data = 30
+        self.anglularVel_publisher.publish(vel)
+        self.get_logger().info('turning left')
+    
+    def angle_to_index(self, angle, array):
+        length = len(array)
+        return int((angle / (360)) * (length - 1))
+
     def masterFSM(self):
         if self.state == "idle":
             pass
 
         elif self.state == "wall_following":
-            self.get_logger().info("Wall Follow function started")
-            d = 0.20
-            d_thres = 0.05
-
-            def search_for_wall():
-                self.linear_publisher.publish(10)
-                self.anglularVel_publisher.publish(-10)
+            d = 0.2
+            d_thres = 0.10
             
-            def turn_left():
-                self.anglularVel_publisher.publish(30)
+            self.f = self.laser_range[0]
+            self.l = self.laser_range[self.angle_to_index(45, self.laser_range)]
+            self.r = self.laser_range[self.angle_to_index(315, self.laser_range)]
 
+            #self.get_logger().info(str(self.f))
             if self.l > d and self.f < d and self.r > d:
-                search_for_wall()
+                self.search_for_wall()
+                #self.get_logger().info('1')
             elif self.l < d and self.f > d and self.r > d:
-                turn_left()
+                self.turn_left()
+                #self.get_logger().info('2')
             elif self.l > d and self.f < d and self.r < d:
                 if self.r < d_thres: 
-                    turn_left()
+                    self.turn_left()
+                    #self.get_logger().info('3')
                 else:
-                    self.linear_publisher.publish(10)
+                    vel2 = Int8()
+                    vel2.data = 20
+                    self.linear_publisher.publish(vel2)
+                    #self.get_logger().info('4')
             elif self.l < d and self.f > d and self.r > d:
-                search_for_wall()
+                self.search_for_wall()
+                #self.get_logger().info('5')
             elif self.l > d and self.f < d and self.r < d:
-                turn_left()
+                self.turn_left()
+                #self.get_logger().info('6')
             elif self.l < d and self.f < d and self.r > d:
-                turn_left()
+                self.turn_left()
+                #self.get_logger().info('7')
             elif self.l < d and self.f < d and self.r < d:
-                turn_left()
+                self.turn_left()
+                #self.get_logger().info('8')
+                #pass
             elif self.l < d and self.f > d and self.r < d:
-                search_for_wall()
+                self.search_for_wall()
+                #self.get_logger().info('9')
             else:
                 pass        
 
@@ -255,7 +283,6 @@ def main(args=None):
 
     try:
         rclpy.spin(master_node)
-        master_node.wall_follow()
     except KeyboardInterrupt:
         pass
     finally:
