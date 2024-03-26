@@ -205,19 +205,19 @@ class MasterNode(Node):
     
     def search_for_wall(self):
         lin_vel1 = Int8()
-        lin_vel1.data = 50
+        lin_vel1.data = 100
         self.linear_publisher.publish(lin_vel1)
         ang_vel1 = Int8()
-        ang_vel1.data = -25
+        ang_vel1.data = -50
         self.anglularVel_publisher.publish(ang_vel1)
         #self.get_logger().info('searching for wall')
     
     def turn_left(self):
         lin_vel2 = Int8()
-        lin_vel2.data = 30
+        lin_vel2.data = 60
         self.linear_publisher.publish(lin_vel2)
         ang_vel2 = Int8()
-        ang_vel2.data = 60
+        ang_vel2.data = 120
         self.anglularVel_publisher.publish(ang_vel2)
         #self.get_logger().info('turning left')
     
@@ -254,10 +254,10 @@ class MasterNode(Node):
             elif self.l > d and self.f > d and self.r < d:
                 if self.r < d_thres: 
                     lin_vel3 = Int8()
-                    lin_vel3.data = 20
+                    lin_vel3.data = 80
                     self.linear_publisher.publish(lin_vel3)
                     ang_vel3 = Int8()
-                    ang_vel3.data = 40
+                    ang_vel3.data = 120
                     self.anglularVel_publisher.publish(ang_vel3)
                     self.get_logger().info('3 dont hit right wall')
             
