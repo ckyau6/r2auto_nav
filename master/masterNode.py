@@ -7,6 +7,8 @@ from geometry_msgs.msg import Twist, Pose
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
 import math
 import heapq
 
@@ -139,6 +141,12 @@ class MasterNode(Node):
 
         self.get_logger().info("MasterNode has started, bitchesss! >:D")
 
+        # constants
+        self.linear_speed = 100
+        # self.yaw_offset = 0
+        self.recalc_freq = 30  # frequency to recalculate target angle and fix direction (10 means every one second)
+        self.recalc_stat = 0
+
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
         self.doorStatus = msg.data
@@ -167,7 +175,7 @@ class MasterNode(Node):
 
     def occ_callback(self, msg):
         # create numpy array
-        msgdata = np.array(msg.data)
+        self.msgdata = np.array(msg.data)
         # compute histogram to identify percent of bins with -1
         # occ_counts = np.histogram(msgdata, occ_bins)
         # calculate total number of bins
@@ -176,21 +184,21 @@ class MasterNode(Node):
         # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
 
         # reshape to 2D array using column order
-        # self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width,order='F'))
-        self.occmap = np.uint8(msgdata.reshape(msg.info.height, msg.info.width))
-        # print to file
-        # np.savetxt(mapfile, self.occdata)
-        self.map_resolution = msg.info.resolution  # according to experiment, should be 0.05 m
+        self.occmap = np.uint8(self.msgdata.reshape(msg.info.height, msg.info.width))
+        self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
         self.map_w = msg.info.width
         self.map_h = msg.info.height
+        self.map_origin_x = msg.info.origin.position.x
+        self.map_origin_y = msg.info.origin.position.y
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
-        self.pos_x = int(msg.position.x / self.map_resolution)
-        self.pos_y = int(msg.position.y / self.map_resolution)
+        self.pos_x = msg.position.x
+        self.pos_y = msg.position.y
         # in degrees (not radians)
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
-        self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
+        # self.yaw += self.yaw_offset
+        # self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
 
     def robotControlNode_state_feedback_callback(self, msg):
         self.robotControlNodeState = msg.data
@@ -205,44 +213,86 @@ class MasterNode(Node):
     def masterFSM(self):
         if self.state == "idle":
             pass
+        elif self.state == "rotating":
+            # self.get_logger().info('current yaw: %f' % self.yaw)
+            if self.robotControlNodeState == "rotateStop":
+                speed = Int8()
+                speed.data = self.linear_speed
+                self.linear_publisher.publish(speed)
+                # self.get_logger().info('start moving forward')
+                self.state = "moving"
+                self.recalc_stat = 0
+        elif self.state == "moving":
+            # self.get_logger().info('currently at (%f %f)' % (self.pos_x, self.pos_y))
+            if abs(self.pos_x - self.dest_x[0]) < self.map_res and abs(self.pos_y - self.dest_y[0]) < self.map_res:
+                speed = Int8()
+                speed.data = 0
+                self.linear_publisher.publish(speed)
+                self.get_logger().info('finished moving')
+                self.dest_x = self.dest_x[1:]
+                self.dest_y = self.dest_y[1:]
+                if len(self.dest_x) == 0:
+                    self.state = "idle"
+                else:
+                    self.move_straight_to(self.dest_x[0], self.dest_y[0])
+                return
+            self.recalc_stat += 1
+            # recalculate target angle
+            if self.recalc_stat == self.recalc_freq:
+                self.recalc_stat = 0
+                target_yaw = math.atan2(self.dest_y[0] - self.pos_y, self.dest_x[0] - self.pos_x) * (180 / math.pi)
+                speed = Int8()
+                speed.data = 0
+                self.linear_publisher.publish(speed)
+                deltaAngle = Float64()
+                deltaAngle.data = target_yaw - self.yaw
+                self.deltaAngle_publisher.publish(deltaAngle)
+                self.state = "rotating"
         else:
-            self.state = "idle"
+            mode, tx, ty = map(float, self.state.split())
+            mode = int(mode)
+            if mode == 0:
+                self.dest_x = [tx]
+                self.dest_y = [ty]
+                self.move_straight_to(tx, ty)
+            elif mode == 1:
+                self.move_to(tx, ty)
+            elif mode == 2:
+                self.draw_occ_map_image()
+                self.state = "idle"
+            else:
+                self.get_logger().info('mode %d does not exist' % mode)
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.pos_y, tx - self.pos_x) * (180 / math.pi)
-        self.get_logger().info('currently at (%d %d), moving straight to (%d, %d), target_yaw: %f' % (self.pos_x, self.pos_y, tx, ty, target_yaw))
-        self.angle_to_publish.data = target_yaw - self.yaw
-        self.angle_publisher.publish(self.angle_to_publish)
-        while True:
-            rclpy.spin_once(self)
-            self.get_logger().info('current yaw: %d' % self.yaw)
-            if abs(target_yaw - self.yaw) <= 1:
-                break
-            time.sleep(0.1)
-        time.sleep(2)
-        self.get_logger().info('start moving forward')
-        self.linear_publisher.publish(self.move_command)
-        while True:
-            rclpy.spin_once(self)
-            self.get_logger().info('current position: %d %d' % (self.pos_x, self.pos_y))
-            if tx == self.pos_x and ty == self.pos_y:
-                self.linear_publisher.publish(self.stop_command)
-                break
-            time.sleep(0.1)
-        self.get_logger().info('finished moving')
+        self.get_logger().info('currently at (%f %f), moving straight to (%f, %f)' % (self.pos_x, self.pos_y, tx, ty))
+        # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
+        deltaAngle = Float64()
+        deltaAngle.data = target_yaw - self.yaw
+        self.deltaAngle_publisher.publish(deltaAngle)
+        self.state = "rotating"
 
     def find_path_to(self, tx, ty):
-        ok = [[True for x in range(self.map_w)] for y in range(self.map_h)]  # True if robot can go to that cell
-        robot_radius = 3
+        ok = [[1 for x in range(self.map_w)] for y in range(self.map_h)]  # 1 if robot can go to that cell
+        robot_radius = 3  # avoid going a cell if distance to the nearest occupied cell from that cell is within this value
         occupied_threshold = 50
         for y in range(self.map_h):
             for x in range(self.map_w):
                 for i in range(y - robot_radius, y + robot_radius + 1):
                     for j in range(x - robot_radius, x + robot_radius + 1):
-                        if 0 <= i < self.map_h and 0 <= j < self.map_w and self.occmap[i][j] >= occupied_threshold:
-                            ok[i][j] = False
-        sx = self.pos_x
-        sy = self.pos_y
+                        if 0 <= i < self.map_h and 0 <= j < self.map_w and not (0 <= self.occmap[i][j] <= occupied_threshold):
+                            ok[i][j] = 0
+
+        # img = Image.fromarray(np.uint8(ok))
+        # plt.imshow(img, cmap='gray', origin='lower')
+        # plt.draw_all()
+        # plt.pause(0.00000000001)
+
+        # get grid coordination
+        sx = round((self.pos_x - self.map_origin_x) / self.map_res)
+        sy = round((self.pos_y - self.map_origin_y) / self.map_res)
+        tx = round((tx - self.map_origin_x) / self.map_res)
+        ty = round((ty - self.map_origin_y) / self.map_res)
         dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
         pre = [[(0, 0) for x in range(self.map_w)] for y in range(self.map_h)]
         dist[sy][sx] = 0
@@ -252,40 +302,58 @@ class MasterNode(Node):
         dy = [1, -1, 0, 0]
         while pq:
             d, y, x = heapq.heappop(pq)
-            if d > d[y][x] + 0.001:
+            if d > dist[y][x] + 0.001:
                 continue
             if y == ty and x == tx:
                 break
             for k in range(4):
                 ny, nx = y, x
-                nd = d + 3  # for taking rotation time into account, magical constant
+                nd = d + 1.5  # for taking rotation time into account, magical constant
                 while True:
                     ny += dy[k]
                     nx += dx[k]
                     nd += 1
                     if ny < 0 or ny >= self.map_h or nx < 0 or nx >= self.map_w:
                         break
-                    if not ok[ny][nx]:
+                    if ok[ny][nx] == 0:
                         break
                     if dist[ny][nx] > nd:
                         dist[ny][nx] = nd
                         pre[ny][nx] = (y, x)
                         heapq.heappush(pq, (nd, ny, nx))
-        res = []
+        self.get_logger().info('distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
+        res_x = []
+        res_y = []
         while True:
-            res.append((tx, ty))
+            res_x.append(self.map_origin_x + self.map_res * tx)
+            res_y.append(self.map_origin_y + self.map_res * ty)
             if ty == sy and tx == sx:
                 break
             ty, tx = pre[ty][tx]
-        return res
+        res_x.reverse()
+        res_y.reverse()
+        return res_x, res_y
 
     def move_to(self, tx, ty):
-        self.get_logger().info('currently at (%d %d), moving to (%d, %d)' % (self.pos_x, self.pos_y, tx, ty))
-        path = self.find_path_to(tx, ty)
+        self.get_logger().info('currently at (%f %f), moving to (%f, %f)' % (self.pos_x, self.pos_y, tx, ty))
+        self.dest_x, self.dest_y = self.find_path_to(tx, ty)
         self.get_logger().info('path finding finished')
-        for i in range(1, len(path)):
-            self.move_to(path[i][0], path[i][1])
+        self.state = "moving"
 
+    def draw_occ_map_image(self):
+        data = self.msgdata
+        for i in range(len(data)):
+            if data[i] == -1:
+                data[i] = 0
+            else:
+                data[i] = 255 - data[i]
+        # create image from 2D array using PIL
+        img = Image.fromarray(np.uint8(data.reshape(self.map_h, self.map_w)))
+        # show the image using grayscale map
+        plt.imshow(img, cmap='gray', origin='lower')
+        plt.draw_all()
+        # pause to make sure the plot gets created
+        plt.pause(0.00000000001)
 
 
 def main(args=None):
