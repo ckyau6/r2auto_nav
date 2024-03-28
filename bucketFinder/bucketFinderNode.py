@@ -35,6 +35,7 @@ class BucketFinderHandler(Node):
     
         self.show_plot = show_plot
         
+        self.get_logger().info("bucketFinderNode has started! :D")
 
     def listener_callback(self, msg):
         # create numpy array to store lidar data
