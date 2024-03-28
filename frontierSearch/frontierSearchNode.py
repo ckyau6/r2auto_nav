@@ -66,6 +66,8 @@ class FrontierSearchNode(Node):
         # Create a publisher to the topic "frontierCoords", an array of coordinates relative to the map frame at where the frontiers are
         # send array of tuples (x, y) as a one dimensional array
         self.frontierCoords_publisher = self.create_publisher(Int16MultiArray, 'frontierCoords', 10)
+        
+        self.get_logger().info("frontierSearchNode has started! :D")
 
     def listener_callback(self, msg):
         ''' ================================================ Occupancy Grid ================================================ '''
