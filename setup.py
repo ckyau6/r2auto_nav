@@ -5,7 +5,13 @@ package_name = 'auto_nav'
 setup(
     name=package_name,
     version='0.0.0',
-    packages=[package_name, package_name + '.httpReq', package_name + '.master', package_name + '.bucketFinder', package_name + '.position_track', package_name + '.robot_control'],
+    packages=[package_name, 
+              package_name + '.httpReq', 
+              package_name + '.master', 
+              package_name + '.bucketFinder', 
+              package_name + '.position_track', 
+              package_name + '.robot_control',
+              package_name + '.frontierSearch',],
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -31,6 +37,7 @@ setup(
             'httpDoorNode = auto_nav.httpReq.httpDoorNode:main',
             'bucketFinderNode = auto_nav.bucketFinder.bucketFinderNode:main',
             'robotControlNode = auto_nav.robot_control.robotControlNode:main',
+            'frontierSearchNode = auto_nav.frontierSearch.frontierSearchNode:main',
         ],
     },
 )
