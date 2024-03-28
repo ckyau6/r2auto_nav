@@ -8,10 +8,30 @@ from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 from PIL import Image
 import math
 import heapq
 
+import argparse
+from collections import deque
+from scipy.ndimage import binary_dilation
+
+import time
+
+# used to convert the occupancy grid to an image of map, umpapped, occupied
+import scipy.stats
+occ_bins = [-1, 0, 50, 100]
+
+# CLEARANCE_RADIUS is in cm, used to dilate the obstacles
+# radius of turtle bot is around 11 cm
+CLEARANCE_RADIUS = 5 #TESTING
+
+FRONTIER_THRESHOLD = 5
+
+NAV_TOO_CLOSE = 0.20
+
+BUCKET_TOO_CLOSE = 0.35
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -19,10 +39,10 @@ def angle_from_quaternion(x, y, z, w):
     t4 = +1.0 - 2.0 * (y * y + z * z)
     return math.degrees(math.atan2(t3, t4))
 
-
 class MasterNode(Node):
-    def __init__(self):
+    def __init__(self, show_plot):
         super().__init__('masterNode')
+        self.show_plot = (show_plot == 'y')
 
         ''' ================================================ http request ================================================ '''
         # Create a subscriber to the topic "doorStatus"
@@ -92,7 +112,8 @@ class MasterNode(Node):
             self.occ_callback,
             qos_profile_sensor_data)
         self.occ_subscription  # prevent unused variable warning
-        self.occmap = np.array([])
+        self.occupancyMap = self.dilutedOccupancyMap = self.frontierMap = np.array([])
+        
         self.yaw = 0
         self.map_res = 0.05
         self.map_w = self.map_h = 0
@@ -148,6 +169,12 @@ class MasterNode(Node):
         # self.yaw_offset = 0
         self.recalc_freq = 30  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
+        
+        self.dest_x = []
+        self.dest_y = []
+        
+        self.lastPlot = time.time()
+        self.lastState = time.time()
 
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
@@ -168,6 +195,9 @@ class MasterNode(Node):
             deltaAngle_msg = Float64()
             deltaAngle_msg.data = 0.0
             self.deltaAngle_publisher.publish(deltaAngle_msg)
+            
+            # go back to idle after releasing
+            self.lastState = time.time()
 
     def scan_callback(self, msg):
         # create numpy array to store lidar data
@@ -190,27 +220,59 @@ class MasterNode(Node):
         self.range_len = len(self.laser_range)
         # self.get_logger().info(str(self.laser_range))
         
+        self.frontLeftIndex = self.angle_to_index(10, self.range_len)
+        self.frontRightIndex = self.angle_to_index(350, self.range_len)
+        
+        self.leftIndexL = self.angle_to_index(90-5, self.range_len)
+        self.leftIndexH = self.angle_to_index(90+5, self.range_len)
+        
+        self.rightIndexL = self.angle_to_index(270-5, self.range_len)
+        self.rightIndexH = self.angle_to_index(270+5, self.range_len)
+        
+        self.backIndexL = self.angle_to_index(180-5, self.range_len)
+        self.backIndexH = self.angle_to_index(180+5, self.range_len)
         
     def bucketAngle_listener_callback(self, msg):
         self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
-        # create numpy array
-        self.msgdata = np.array(msg.data)
-        # compute histogram to identify percent of bins with -1
-        # occ_counts = np.histogram(msgdata, occ_bins)
-        # calculate total number of bins
-        # total_bins = msg.info.width * msg.info.height
-        # log the info
-        # self.get_logger().info('Unmapped: %i Unoccupied: %i Occupied: %i Total: %i' % (occ_counts[0][0], occ_counts[0][1], occ_counts[0][2], total_bins))
-
-        # reshape to 2D array using column order
-        self.occmap = np.uint8(self.msgdata.reshape(msg.info.height, msg.info.width))
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
         self.map_w = msg.info.width
         self.map_h = msg.info.height
         self.map_origin_x = msg.info.origin.position.x
-        self.map_origin_y = msg.info.origin.position.y
+        self.map_origin_y = msg.info.origin.position.y   
+        
+        # this converts the occupancy grid to an 1d array of map, umpapped, occupied
+        occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count', bins=occ_bins)
+
+        # reshape to 2D array 
+        # 1 = unmapped
+        # 2 = mapped and open
+        # 3 = mapped and obstacle
+        self.occupancyMap = np.uint8(binnum.reshape(msg.info.height,msg.info.width))
+        
+        # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
+        # pixelExpend = numbers of pixel to expend by
+        pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))  
+        
+        # Create a binary mask where only cells with a value of 3 are True, since we want to dilate the obstacles
+        mask = (self.occupancyMap == 3)
+
+        # Perform the dilation on the mask
+        dilated_mask = binary_dilation(mask, iterations=pixelExpend)
+
+        # Create a copy of the original occupancy map
+        self.dilutedOccupancyMap = self.occupancyMap.copy()
+
+        # Apply the dilated mask to the copy, setting cells to 3 where the mask is True
+        self.dilutedOccupancyMap[dilated_mask] = 3
+        
+        # this gives the locations of bot in the occupancy map, in pixel
+        self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
+        self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
+        
+        # find frontier points
+        self.frontierSearch()
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
@@ -269,14 +331,6 @@ class MasterNode(Node):
             switch_msg = String()
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
-            
-            # # testin
-            # try:
-            #     argmin = np.nanargmin(self.laser_range)
-            #     angle_min = self.index_to_angle(argmin, self.range_len)
-            #     self.get_logger().info('[idle]: angle_min %f' % angle_min)
-            # except:
-            #     self.get_logger().info('[idle]: angle_min invalid')
 
         elif self.state == "checking_walls_distance":
             # lidar minimum is 12 cm send by node, datasheet says 16 cm
@@ -292,7 +346,7 @@ class MasterNode(Node):
             
             self.get_logger().info('[checking_walls_distance]: min_distance %f' % min_distance)
             
-            if min_distance < 0.35:
+            if min_distance < BUCKET_TOO_CLOSE:
                 self.get_logger().info('[checking_walls_distance]: too close! moving away')
                 
                 # set linear to be zero 
@@ -315,22 +369,11 @@ class MasterNode(Node):
                 self.get_logger().info('[rotating_to_move_away_from_walls]: still rotating, waiting')
                 pass
             else:
-                frontLeftIndex = self.angle_to_index(10, self.range_len)
-                frontRightIndex = self.angle_to_index(350, self.range_len)
-                
-                leftIndexL = self.angle_to_index(90-5, self.range_len)
-                leftIndexH = self.angle_to_index(90+5, self.range_len)
-                
-                rightIndexL = self.angle_to_index(270-5, self.range_len)
-                rightIndexH = self.angle_to_index(270+5, self.range_len)
-                
-                backIndexL = self.angle_to_index(180-5, self.range_len)
-                backIndexH = self.angle_to_index(180+5, self.range_len)
-                
+                # get the index of the front left, front right, back, left, right               
                 # move until the back is more than 40 cm or stop if the front is less than 30 cm
                 # 40cm must be more than the 30cm from smallest distance, so that it wont rotate and get diff distance, lidar is not the center of rotation
                 # must use any not all incase of NaN
-                if any(self.laser_range[0:frontLeftIndex] < 0.30) or any(self.laser_range[frontRightIndex:] < 0.30):
+                if any(self.laser_range[0:self.frontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.frontRightIndex:] < BUCKET_TOO_CLOSE):
                     # infront got something
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
                     
@@ -350,7 +393,7 @@ class MasterNode(Node):
                 else:
                     self.get_logger().info('[rotating_to_move_away_from_walls]: front is still clear! go forward')
                     
-                    if any(self.laser_range[backIndexL:backIndexH] < 0.40):
+                    if any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
                         
                         # set linear to be 127 to move forward fastest
@@ -364,10 +407,10 @@ class MasterNode(Node):
                         # if left got something, rotate right
                         # elif right got something, rotate left
                         # else go straight
-                        if all(self.laser_range[leftIndexL:leftIndexH] < 0.30):
+                        if all(self.laser_range[self.leftIndexL:self.leftIndexH] < BUCKET_TOO_CLOSE):
                             anglularVel_msg.data = -127
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and right')
-                        elif all(self.laser_range[rightIndexL:rightIndexH] < 0.30):
+                        elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < BUCKET_TOO_CLOSE):
                             anglularVel_msg.data = 127
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and left')
                         else:
@@ -472,47 +515,90 @@ class MasterNode(Node):
             servoAngle_msg.data = 180
             self.servo_publisher.publish(servoAngle_msg)
             self.get_logger().info('[releasing]: easy clap')
-        elif self.state == "rotating":
+            
+            # 5 second after releasing, go back to idle
+            if (time.time() - self.lastState) > 5:
+                self.state = "idle"
+            
+        elif self.state == "maze_rotating":
             # self.get_logger().info('current yaw: %f' % self.yaw)
             if self.robotControlNodeState == "rotateStop":
-                speed = Int8()
-                speed.data = self.linear_speed
-                self.linear_publisher.publish(speed)
-                # self.get_logger().info('start moving forward')
-                self.state = "moving"
+                # set linear to start moving forward
+                linear_msg = Int8()
+                linear_msg.data = self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                
+                self.state = "maze_moving"
+                
+                # reset recalc_stat
                 self.recalc_stat = 0
-        elif self.state == "moving":
-            # self.get_logger().info('currently at (%f %f)' % (self.pos_x, self.pos_y))
-            if abs(self.pos_x - self.dest_x[0]) < self.map_res and abs(self.pos_y - self.dest_y[0]) < self.map_res:
-                speed = Int8()
-                speed.data = 0
-                self.linear_publisher.publish(speed)
-                self.get_logger().info('finished moving')
+        elif self.state == "maze_moving":
+            # if reached the destination (within one pixel), stop and move to the next destination
+            if abs(self.botx_pixel - self.dest_x[0]) <= 1 and abs(self.boty_pixel - self.dest_y[0]) <= 1:
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                self.get_logger().info('[maze_moving]: finished moving')
+                
                 self.dest_x = self.dest_x[1:]
                 self.dest_y = self.dest_y[1:]
+                
                 if len(self.dest_x) == 0:
                     self.state = "idle"
                 else:
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
+            
             self.recalc_stat += 1
-            # recalculate target angle
+            
+            # recalculate target angle if reach recalc_freq
             if self.recalc_stat == self.recalc_freq:
                 self.recalc_stat = 0
-                target_yaw = math.atan2(self.dest_y[0] - self.pos_y, self.dest_x[0] - self.pos_x) * (180 / math.pi)
-                speed = Int8()
-                speed.data = 0
-                self.linear_publisher.publish(speed)
-                deltaAngle = Float64()
-                deltaAngle.data = target_yaw - self.yaw
-                self.deltaAngle_publisher.publish(deltaAngle)
-                self.state = "rotating"
+                target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
+                
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle to rotate to target angle
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = (target_yaw - self.yaw) * 1.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                self.state = "maze_rotating"
+                return
+            
+            # # if left got something, rotate right
+            # # elif right got something, rotate left
+            # # else go straight
+            
+            # anglularVel_msg = Int8()
+            
+            # if all(self.laser_range[self.leftIndexL:self.leftIndexH] < NAV_TOO_CLOSE):
+            #     anglularVel_msg.data = -127
+            #     self.get_logger().info('[maze_moving]: moving forward and right')
+            # elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < NAV_TOO_CLOSE):
+            #     anglularVel_msg.data = 127
+            #     self.get_logger().info('[maze_moving]: moving forward and left')
+            # else:
+            #     anglularVel_msg.data = 0
+            #     self.get_logger().info('[maze_moving]: moving forward')
+                
+            # self.anglularVel_publisher.publish(anglularVel_msg)
         else:
-            mode, tx, ty = map(float, self.state.split())
+            mode, tx, ty = map(int, self.state.split())
             mode = int(mode)
             if mode == 0:
-                self.dest_x = [tx]
-                self.dest_y = [ty]
+                self.dest_x.append(tx)
+                self.dest_y.append(ty)
                 self.move_straight_to(tx, ty)
             elif mode == 1:
                 self.move_to(tx, ty)
@@ -521,19 +607,263 @@ class MasterNode(Node):
                 self.state = "idle"
             else:
                 self.get_logger().info('mode %d does not exist' % mode)
+                
+                
+        ''' ================================================ DEBUG PLOT ================================================ '''
+        if self.show_plot and len(self.frontierMap) > 0 and (time.time() - self.lastPlot) > 1:
+            # shows the diluted occupancy map with frontiers and path planning points
+            self.totalMap = self.frontierMap.copy()
+            
+            # 0 = robot
+            # 1 = unmapped
+            # 2 = mapped and open
+            # 3 = mapped and obstacle
+            # 4 = frontier
+            # 5 = frontier point
+            # 6 = path planning points
+            
+            for i in range(len(self.dest_x)):
+                self.totalMap[self.dest_y[i]][self.dest_x[i]] = 6
+                
+            # if no path planning points, less colours
+            if len(self.dest_x) == 0:
+                cmap = ListedColormap(['black',
+                                        (85/255, 85/255, 85/255), 
+                                        (170/255, 170/255, 170/255), 
+                                        'white', 
+                                        (0, 1, 1), 
+                                        (1, 0, 1), 
+                                        ])
+            else:
+                cmap = ListedColormap(['black',
+                                        (85/255, 85/255, 85/255), 
+                                        (170/255, 170/255, 170/255), 
+                                        'white', 
+                                        (0, 1, 1), 
+                                        (1, 0, 1), 
+                                        (1, 1, 0)
+                                        ])
+            
+            plt.imshow(self.totalMap, origin='lower', cmap=cmap)
+                    
+            plt.draw_all()
+            # pause to make sure the plot gets created
+            plt.pause(0.00000000001)
+            
+            self.lastPlot = time.time()
 
+    def move_straight_to(self, tx, ty):
+        target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
+        self.get_logger().info('currently at (%d %d), moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
+        # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
+        deltaAngle = Float64()
+        deltaAngle.data = target_yaw - self.yaw
+        self.deltaAngle_publisher.publish(deltaAngle)
+        self.state = "maze_rotating"
+
+    def find_path_to(self, tx, ty):    
+        # unmapped/osbstacle is 0, open space 1
+        ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
+        
+        # get grid coordination
+        sx = round((self.pos_x - self.map_origin_x) / self.map_res)
+        sy = round((self.pos_y - self.map_origin_y) / self.map_res)
+        dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
+        pre = [[(0, 0) for x in range(self.map_w)] for y in range(self.map_h)]
+        dist[sy][sx] = 0
+        pq = []
+        heapq.heappush(pq, (0, sy, sx))
+        dx = [0, 0, 1, -1]
+        dy = [1, -1, 0, 0]
+        while pq:
+            d, y, x = heapq.heappop(pq)
+            if d > dist[y][x] + 0.001:
+                continue
+            if y == ty and x == tx:
+                break
+            for k in range(4):
+                ny, nx = y, x
+                nd = d + 1.5  # for taking rotation time into account, magical constant
+                while True:
+                    ny += dy[k]
+                    nx += dx[k]
+                    nd += 1
+                    if ny < 0 or ny >= self.map_h or nx < 0 or nx >= self.map_w:
+                        break
+                    if ok[ny][nx] == 0:
+                        break
+                    if dist[ny][nx] > nd:
+                        dist[ny][nx] = nd
+                        pre[ny][nx] = (y, x)
+                        heapq.heappush(pq, (nd, ny, nx))
+        self.get_logger().info('distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
+        res_x = []
+        res_y = []
+        while True:
+            res_x.append(tx)
+            res_y.append(ty)
+            if ty == sy and tx == sx:
+                break
+            ty, tx = pre[ty][tx]
+        res_x.reverse()
+        res_y.reverse()
+        return res_x, res_y
+        
+        
+
+    def move_to(self, tx, ty):
+        self.get_logger().info('currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
+        self.dest_x, self.dest_y = self.find_path_to(tx, ty)
+        self.get_logger().info('path finding finished')
+        self.state = "maze_moving"
+        
+    def frontierSearch(self):      
+        if len(self.dilutedOccupancyMap) == 0:
+            return
+        
+        # 0 = robot
+        # 1 = unmapped
+        # 2 = mapped and open
+        # 3 = mapped and obstacle
+        # 4 = frontier
+        # 5 = frontier point
+        
+        ''' ================================================ Frontier Search ================================================ '''      
+        # frontier is between 1 = unmapped and 2 = mapped and open
+        
+        frontier = []
+
+        # Iterate over the array
+        for i in range(self.map_h):
+            for j in range(self.map_w):
+                # Check if the current pixel is 1
+                if self.dilutedOccupancyMap[i, j] == 1:
+                    # check for diagonals also so BFS with UP, DOWN, LEFT, RIGHT can colect all frontier pixels
+                    for di in [-1, 0, 1]:
+                        for dj in [-1, 0, 1]:
+                            # Skip the current pixel
+                            if di == 0 and dj == 0:
+                                continue
+                            # Check if the neighboring pixel is inside the image
+                            if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w:
+                                # Check if the neighboring pixel is 2
+                                if self.dilutedOccupancyMap[i + di, j + dj] == 2:
+                                    frontier.append((i, j))
+                                    # self.get_logger().info(str("Pixel 1 at (" + str(i) + ", " + str(j) + ") is next to pixel 2 at (" + str(i + di) + ", " + str(j + dj) + ")" ))
+        
+        # BFS to find all frontier groups
+        # Initialize the queue with the first pixel
+        queue = deque([frontier[0]])
+
+        # Initialize the set of visited pixels
+        visited = set([frontier[0]])
+
+        # Initialize the list of groups
+        groups = []
+
+        # Perform the BFS
+        while queue:
+            # Start a new group
+            group = []
+
+            # Process all pixels in the current group
+            while queue:
+                i, j = queue.popleft()
+                group.append((i, j))
+
+                # Check the neighboring pixels
+                for di in [-1, 0, 1]:
+                    for dj in [-1, 0, 1]:
+                        # Skip the current pixel and diagonal pixels
+                        if (di == 0 and dj == 0) or (di != 0 and dj != 0):
+                            continue
+
+                        # Check if the neighboring pixel is inside the image and in the frontier
+                        if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w and (i + di, j + dj) in frontier:
+                            # Check if the neighboring pixel has not been visited yet
+                            if (i + di, j + dj) not in visited:
+                                # Add the neighboring pixel to the queue and the set of visited pixels
+                                queue.append((i + di, j + dj))
+                                visited.add((i + di, j + dj))
+
+            # Add the group to the list of groups
+            groups.append(group)
+
+            # Find the next unvisited pixel in the frontier
+            for pixel in frontier:
+                if pixel not in visited:
+                    queue.append(pixel)
+                    visited.add(pixel)
+                    break
+               
+        # find frontier points if the frontier group has more than FRONTIER_THRESHOLD points        
+        # Initialize the list of frontier points
+        frontierPoints = []
+
+        # Iterate over the groups
+        for group in groups:
+            if len(group) < FRONTIER_THRESHOLD:
+                continue
+            
+            # Extract the x and y coordinates
+            x_coords = [w for h, w in group]
+            y_coords = [h for h, w in group]
+
+            # Calculate the middle x and y coordinates
+            middle_x = sorted(x_coords)[len(x_coords) // 2]
+            middle_y = sorted(y_coords)[len(y_coords) // 2]
+
+            frontierPoints.append((middle_x, middle_y))
+            
+        # self.get_logger().info("frontierPoints:" + str(frontierPoints))
+               
+        # make a copy of the occupancy map
+        self.frontierMap = self.dilutedOccupancyMap.copy()
+        
+        # Set the value of the frontier to 4 and the frontier points to 5
+        for pixel in frontier:
+            self.frontierMap[pixel[0], pixel[1]] = 4
+
+        for pixel in frontierPoints:
+            self.frontierMap[pixel[1], pixel[0]] = 5
+            
+        # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+        self.frontierMap[self.boty_pixel][self.botx_pixel] = 0
+            
+        # # 0 = robot
+        # # 1 = unmapped
+        # # 2 = mapped and open
+        # # 3 = mapped and obstacle
+        # # 4 = frontier
+        # # 5 = frontier point
+        # cmap = ListedColormap(['black', (85/255, 85/255, 85/255), (170/255, 170/255, 170/255), 'white', (0, 1, 1), (1, 0, 1)])
+        
+        # plt.imshow(self.frontierMap, origin='lower', cmap=cmap)
+                
+        # plt.draw_all()
+        # # pause to make sure the plot gets created
+        # plt.pause(0.00000000001)
 
 def main(args=None):
     rclpy.init(args=args)
-
-    master_node = MasterNode()
-
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Start the masterNode.')
+    parser.add_argument('-s', type=str, default='n', help='Show plot (y/n)')
+    args = parser.parse_args()
+    
+    master_node = MasterNode(args.s)
+    
+    if args.s == 'y':
+        # create matplotlib figure
+        plt.ion()
+        plt.figure()    
     try:
         rclpy.spin(master_node)
     except KeyboardInterrupt:
         pass
     finally:
-        master_node.custom_destroy_node()
+        master_node.destroy_node()
 
 if __name__ == '__main__':
     main()
