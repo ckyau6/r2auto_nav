@@ -101,7 +101,7 @@ class MasterNode(Node):
             self.bucketAngle_listener_callback,
             10)
         self.bucketAngle_subscription  # prevent unused variable warning  
-        
+
         self.bucketAngle = 0
 
         ''' ================================================ occupancy map ================================================ '''
@@ -113,7 +113,7 @@ class MasterNode(Node):
             qos_profile_sensor_data)
         self.occ_subscription  # prevent unused variable warning
         self.occupancyMap = self.dilutedOccupancyMap = self.frontierMap = np.array([])
-        
+
         self.yaw = 0
         self.map_res = 0.05
         self.map_w = self.map_h = 0
@@ -169,10 +169,10 @@ class MasterNode(Node):
         # self.yaw_offset = 0
         self.recalc_freq = 30  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
-        
+
         self.dest_x = []
         self.dest_y = []
-        
+
         self.lastPlot = time.time()
         self.lastState = time.time()
 
@@ -185,53 +185,53 @@ class MasterNode(Node):
         self.switchStatus = msg.data
         if self.state == "moving_to_bucket" and self.switchStatus == "pressed":
             self.state = "releasing"
-            
+
             # set linear to be zero
             linear_msg = Int8()
             linear_msg.data = 0
             self.linear_publisher.publish(linear_msg)
-            
+
             # set delta angle = 0 to stop
             deltaAngle_msg = Float64()
             deltaAngle_msg.data = 0.0
             self.deltaAngle_publisher.publish(deltaAngle_msg)
-            
+
             # go back to idle after releasing
             self.lastState = time.time()
 
     def scan_callback(self, msg):
         # create numpy array to store lidar data
         self.laser_range = np.array(msg.ranges)
-        
+
         # # read min and max range values
         # self.range_min = msg.range_min
         # self.range_max = msg.range_max
-        
+
         # self.get_logger().info("range_min: $s, range_max: $s" % (str(self.range_min), str(self.range_max)))
-        
+
         # # replace out of range values with nan
         # self.laser_range[self.laser_range < self.range_min] = np.nan
         # self.laser_range[self.laser_range > self.range_max] = np.nan
-        
+
         # replace 0's with nan
         self.laser_range[self.laser_range==0] = np.nan
-        
+
         # store the len since it changes
         self.range_len = len(self.laser_range)
         # self.get_logger().info(str(self.laser_range))
-        
+
         self.frontLeftIndex = self.angle_to_index(10, self.range_len)
         self.frontRightIndex = self.angle_to_index(350, self.range_len)
-        
+
         self.leftIndexL = self.angle_to_index(90-5, self.range_len)
         self.leftIndexH = self.angle_to_index(90+5, self.range_len)
-        
+
         self.rightIndexL = self.angle_to_index(270-5, self.range_len)
         self.rightIndexH = self.angle_to_index(270+5, self.range_len)
-        
+
         self.backIndexL = self.angle_to_index(180-5, self.range_len)
         self.backIndexH = self.angle_to_index(180+5, self.range_len)
-        
+
     def bucketAngle_listener_callback(self, msg):
         self.bucketAngle = msg.data
 
@@ -240,8 +240,8 @@ class MasterNode(Node):
         self.map_w = msg.info.width
         self.map_h = msg.info.height
         self.map_origin_x = msg.info.origin.position.x
-        self.map_origin_y = msg.info.origin.position.y   
-        
+        self.map_origin_y = msg.info.origin.position.y
+
         # this converts the occupancy grid to an 1d array of map, umpapped, occupied
         occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count', bins=occ_bins)
 
@@ -250,11 +250,11 @@ class MasterNode(Node):
         # 2 = mapped and open
         # 3 = mapped and obstacle
         self.occupancyMap = np.uint8(binnum.reshape(msg.info.height,msg.info.width))
-        
+
         # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
         # pixelExpend = numbers of pixel to expend by
-        pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))  
-        
+        pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))
+
         # Create a binary mask where only cells with a value of 3 are True, since we want to dilate the obstacles
         mask = (self.occupancyMap == 3)
 
@@ -266,13 +266,35 @@ class MasterNode(Node):
 
         # Apply the dilated mask to the copy, setting cells to 3 where the mask is True
         self.dilutedOccupancyMap[dilated_mask] = 3
-        
+
         # this gives the locations of bot in the occupancy map, in pixel
         self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
         self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
-        
+
         # find frontier points
         self.frontierSearch()
+
+        # recalculate path
+        if len(self.dest_x) > 0:
+            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
+            if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
+                self.get_logger().info('path updated')
+                # if the first target point changes, stop once and move again
+                if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
+                    # set linear to be zero
+                    linear_msg = Int8()
+                    linear_msg.data = 0
+                    self.linear_publisher.publish(linear_msg)
+
+                    # set delta angle = 0 to stop
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = 0.0
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                    self.move_straight_to(new_dest_x[0], new_dest_y[0])
+                # update target points
+                self.dest_x = new_dest_x
+                self.dest_y = new_dest_y
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
@@ -292,41 +314,41 @@ class MasterNode(Node):
     def index_to_angle(self, index, arrLen):
         # return in degrees
         return (index / (arrLen - 1)) * 359
-    
+
     def angle_to_index(self, angle, arrLen):
         # take deg give index
         return int((angle / 359) * (arrLen - 1))
-    
+
     def custom_destroy_node(self):
         # set linear to be zero
         linear_msg = Int8()
         linear_msg.data = 0
         self.linear_publisher.publish(linear_msg)
-        
+
         # set delta angle = 0 to stop
         deltaAngle_msg = Float64()
         deltaAngle_msg.data = 0.0
         self.deltaAngle_publisher.publish(deltaAngle_msg)
-        
+
         self.destroy_node()
-    
+
     def masterFSM(self):
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
             servoAngle_msg = UInt8()
             servoAngle_msg.data = 90
             self.servo_publisher.publish(servoAngle_msg)
-            
+
             # set linear to be zero
             linear_msg = Int8()
             linear_msg.data = 0
             self.linear_publisher.publish(linear_msg)
-            
+
             # set delta angle = 0 to stop
             deltaAngle_msg = Float64()
             deltaAngle_msg.data = 0.0
             self.deltaAngle_publisher.publish(deltaAngle_msg)
-            
+
             # off limit switch
             switch_msg = String()
             switch_msg.data = "deactivate"
@@ -337,23 +359,23 @@ class MasterNode(Node):
             # by experimentation need 30 cm
             # if less than 30 cm from nearest object, move away from it, else can find the bucket using bucketFinderNode
             # bucket finder doesnt work if its too close to wall
-            
+
             argmin = np.nanargmin(self.laser_range)
             angle_min = self.index_to_angle(argmin, self.range_len)
             self.get_logger().info('[checking_walls_distance]: angle_min %f' % angle_min)
-            
+
             min_distance = self.laser_range[argmin]
-            
+
             self.get_logger().info('[checking_walls_distance]: min_distance %f' % min_distance)
-            
+
             if min_distance < BUCKET_TOO_CLOSE:
                 self.get_logger().info('[checking_walls_distance]: too close! moving away')
-                
+
                 # set linear to be zero 
                 linear_msg = Int8()
                 linear_msg.data = 0
                 self.linear_publisher.publish(linear_msg)
-                
+
                 # angle_min > or < 180, the delta angle to move away from the object is still the same
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = angle_min - 180.0
@@ -362,7 +384,7 @@ class MasterNode(Node):
                 self.state = "rotating_to_move_away_from_walls"
 
             else:
-                self.state = "rotating_to_bucket"                   
+                self.state = "rotating_to_bucket"
         elif self.state == "rotating_to_move_away_from_walls":
             # if still rotating wait, else can move forward until the back is 30 cm away
             if self.robotControlNodeState == "rotateByAngle":
@@ -376,34 +398,34 @@ class MasterNode(Node):
                 if any(self.laser_range[0:self.frontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.frontRightIndex:] < BUCKET_TOO_CLOSE):
                     # infront got something
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
-                    
+
                     # set linear to be zero
                     linear_msg = Int8()
                     linear_msg.data = 0
                     self.linear_publisher.publish(linear_msg)
-                    
+
                     # set delta angle = 0 to stop
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data = 0.0
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
-                    
+
                     # send back to checking_walls_distance to check for all distance again
                     self.state = "checking_walls_distance"
-                    
+
                 else:
                     self.get_logger().info('[rotating_to_move_away_from_walls]: front is still clear! go forward')
-                    
+
                     if any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
-                        
+
                         # set linear to be 127 to move forward fastest
                         linear_msg = Int8()
                         linear_msg.data = 127
                         self.linear_publisher.publish(linear_msg)
-                    
-        
+
+
                         anglularVel_msg = Int8()
-                        
+
                         # if left got something, rotate right
                         # elif right got something, rotate left
                         # else go straight
@@ -416,39 +438,39 @@ class MasterNode(Node):
                         else:
                             anglularVel_msg.data = 0
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward')
-                            
+
                         self.anglularVel_publisher.publish(anglularVel_msg)
                     else:
                         # moved far enough
                         self.get_logger().info('[rotating_to_move_away_from_walls]: moved far enough, butt is clear')
-                        
+
                         # set linear to be zero
                         linear_msg = Int8()
                         linear_msg.data = 0
                         self.linear_publisher.publish(linear_msg)
-                        
+
                         # set delta angle = 0 to stop
                         deltaAngle_msg = Float64()
                         deltaAngle_msg.data = 0.0
                         self.deltaAngle_publisher.publish(deltaAngle_msg)
-                        
+
                         # send back to checking_walls_distance to check for all distance again
                         self.state = "checking_walls_distance"
-                    
-        elif self.state == "rotating_to_bucket":            
+
+        elif self.state == "rotating_to_bucket":
             # if close to forward, go to next state, else allign to bucket first
             if abs(self.bucketAngle) < 2:
                 self.get_logger().info('[rotating_to_bucket]: close enough, moving to bucket now')
                 self.state = "moving_to_bucket"
             else:
                 self.get_logger().info('[rotating_to_bucket]: rotating to face bucket')
-                
+
                 if self.bucketAngle < 180:
                     # set linear to be zero 
                     linear_msg = Int8()
                     linear_msg.data = 0
                     self.linear_publisher.publish(linear_msg)
-                    
+
                     # set delta angle = bucketAngle
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data = self.bucketAngle * 1.0 # to change int to float type
@@ -458,7 +480,7 @@ class MasterNode(Node):
                     linear_msg = Int8()
                     linear_msg.data = 0
                     self.linear_publisher.publish(linear_msg)
-                    
+
                     # set delta angle = bucketAngle -360
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data = self.bucketAngle - 360.0  # to change int to float type
@@ -469,15 +491,15 @@ class MasterNode(Node):
                     linear_msg = Int8()
                     linear_msg.data = 0
                     self.linear_publisher.publish(linear_msg)
-                    
+
                     # set delta angle = 90
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data =  90.0
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
-                    
+
                 # send to moving_to_bucket to wait for rotation to finish
                 self.state = "moving_to_bucket"
-                
+
                 # on limit switch
                 switch_msg = String()
                 switch_msg.data = "activate"
@@ -492,10 +514,10 @@ class MasterNode(Node):
                 linear_msg = Int8()
                 linear_msg.data = 127
                 self.linear_publisher.publish(linear_msg)
-                
+
                 # if the bucket is in the to the right, turn left slightly
                 anglularVel_msg = Int8()
-                
+
                 if self.bucketAngle > 5 and self.bucketAngle < 180:
                     anglularVel_msg.data = 100
                     self.get_logger().info('[moving_to_bucket]: moving forward and left')
@@ -505,21 +527,21 @@ class MasterNode(Node):
                 else:
                     anglularVel_msg.data = 0
                     self.get_logger().info('[moving_to_bucket]: moving forward')
-                    
+
                 self.anglularVel_publisher.publish(anglularVel_msg)
-                
+
                 # if the bucket is hit, the state transition and stopping will be done by the switch_listener_callback
             pass
-        elif self.state == "releasing":      
+        elif self.state == "releasing":
             servoAngle_msg = UInt8()
             servoAngle_msg.data = 180
             self.servo_publisher.publish(servoAngle_msg)
             self.get_logger().info('[releasing]: easy clap')
-            
+
             # 5 second after releasing, go back to idle
             if (time.time() - self.lastState) > 5:
                 self.state = "idle"
-            
+
         elif self.state == "maze_rotating":
             # self.get_logger().info('current yaw: %f' % self.yaw)
             if self.robotControlNodeState == "rotateStop":
@@ -527,9 +549,9 @@ class MasterNode(Node):
                 linear_msg = Int8()
                 linear_msg.data = self.linear_speed
                 self.linear_publisher.publish(linear_msg)
-                
+
                 self.state = "maze_moving"
-                
+
                 # reset recalc_stat
                 self.recalc_stat = 0
         elif self.state == "maze_moving":
@@ -539,49 +561,49 @@ class MasterNode(Node):
                 linear_msg = Int8()
                 linear_msg.data = 0
                 self.linear_publisher.publish(linear_msg)
-                
+
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
-                
+
                 self.get_logger().info('[maze_moving]: finished moving')
-                
+
                 self.dest_x = self.dest_x[1:]
                 self.dest_y = self.dest_y[1:]
-                
+
                 if len(self.dest_x) == 0:
                     self.state = "idle"
                 else:
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
-            
+
             self.recalc_stat += 1
-            
+
             # recalculate target angle if reach recalc_freq
             if self.recalc_stat == self.recalc_freq:
                 self.recalc_stat = 0
                 target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
-                
+
                 # set linear to be zero
                 linear_msg = Int8()
                 linear_msg.data = 0
                 self.linear_publisher.publish(linear_msg)
-                
+
                 # set delta angle to rotate to target angle
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = (target_yaw - self.yaw) * 1.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
-                
+
                 self.state = "maze_rotating"
                 return
-            
+
             # # if left got something, rotate right
             # # elif right got something, rotate left
             # # else go straight
-            
+
             # anglularVel_msg = Int8()
-            
+
             # if all(self.laser_range[self.leftIndexL:self.leftIndexH] < NAV_TOO_CLOSE):
             #     anglularVel_msg.data = -127
             #     self.get_logger().info('[maze_moving]: moving forward and right')
@@ -591,11 +613,10 @@ class MasterNode(Node):
             # else:
             #     anglularVel_msg.data = 0
             #     self.get_logger().info('[maze_moving]: moving forward')
-                
+
             # self.anglularVel_publisher.publish(anglularVel_msg)
         else:
             mode, tx, ty = map(int, self.state.split())
-            mode = int(mode)
             if mode == 0:
                 self.dest_x.append(tx)
                 self.dest_y.append(ty)
@@ -604,13 +625,13 @@ class MasterNode(Node):
                 self.move_to(tx, ty)
             else:
                 self.get_logger().info('mode %d does not exist' % mode)
-                
-                
+
+
         ''' ================================================ DEBUG PLOT ================================================ '''
         if self.show_plot and len(self.frontierMap) > 0 and (time.time() - self.lastPlot) > 1:
             # shows the diluted occupancy map with frontiers and path planning points
             self.totalMap = self.frontierMap.copy()
-            
+
             # 0 = robot
             # 1 = unmapped
             # 2 = mapped and open
@@ -618,35 +639,35 @@ class MasterNode(Node):
             # 4 = frontier
             # 5 = frontier point
             # 6 = path planning points
-            
+
             for i in range(len(self.dest_x)):
                 self.totalMap[self.dest_y[i]][self.dest_x[i]] = 6
-                
+
             # if no path planning points, less colours
             if len(self.dest_x) == 0:
                 cmap = ListedColormap(['black',
-                                        (85/255, 85/255, 85/255), 
-                                        (170/255, 170/255, 170/255), 
-                                        'white', 
-                                        (0, 1, 1), 
-                                        (1, 0, 1), 
+                                        (85/255, 85/255, 85/255),
+                                        (170/255, 170/255, 170/255),
+                                        'white',
+                                        (0, 1, 1),
+                                        (1, 0, 1),
                                         ])
             else:
                 cmap = ListedColormap(['black',
-                                        (85/255, 85/255, 85/255), 
-                                        (170/255, 170/255, 170/255), 
-                                        'white', 
-                                        (0, 1, 1), 
-                                        (1, 0, 1), 
+                                        (85/255, 85/255, 85/255),
+                                        (170/255, 170/255, 170/255),
+                                        'white',
+                                        (0, 1, 1),
+                                        (1, 0, 1),
                                         (1, 1, 0)
                                         ])
-            
+
             plt.imshow(self.totalMap, origin='lower', cmap=cmap)
-                    
+
             plt.draw_all()
             # pause to make sure the plot gets created
             plt.pause(0.00000000001)
-            
+
             self.lastPlot = time.time()
 
     def move_straight_to(self, tx, ty):
@@ -658,10 +679,10 @@ class MasterNode(Node):
         self.deltaAngle_publisher.publish(deltaAngle)
         self.state = "maze_rotating"
 
-    def find_path_to(self, tx, ty):    
+    def find_path_to(self, tx, ty):
         # unmapped/obstacle is 0, open space 1
         ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
-        
+
         # get grid coordination
         sx = self.botx_pixel
         sy = self.boty_pixel
@@ -705,29 +726,29 @@ class MasterNode(Node):
         res_x.reverse()
         res_y.reverse()
         return res_x, res_y
-        
-        
+
+
 
     def move_to(self, tx, ty):
         self.get_logger().info('currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
         self.get_logger().info('path finding finished')
         self.state = "maze_moving"
-        
-    def frontierSearch(self):      
+
+    def frontierSearch(self):
         if len(self.dilutedOccupancyMap) == 0:
             return
-        
+
         # 0 = robot
         # 1 = unmapped
         # 2 = mapped and open
         # 3 = mapped and obstacle
         # 4 = frontier
         # 5 = frontier point
-        
-        ''' ================================================ Frontier Search ================================================ '''      
+
+        ''' ================================================ Frontier Search ================================================ '''
         # frontier is between 1 = unmapped and 2 = mapped and open
-        
+
         frontier = []
 
         # Iterate over the array
@@ -747,7 +768,7 @@ class MasterNode(Node):
                                 if self.dilutedOccupancyMap[i + di, j + dj] == 2:
                                     frontier.append((i, j))
                                     # self.get_logger().info(str("Pixel 1 at (" + str(i) + ", " + str(j) + ") is next to pixel 2 at (" + str(i + di) + ", " + str(j + dj) + ")" ))
-        
+
         # BFS to find all frontier groups
         # Initialize the queue with the first pixel
         queue = deque([frontier[0]])
@@ -792,7 +813,7 @@ class MasterNode(Node):
                     queue.append(pixel)
                     visited.add(pixel)
                     break
-               
+
         # find frontier points if the frontier group has more than FRONTIER_THRESHOLD points        
         # Initialize the list of frontier points
         frontierPoints = []
@@ -801,7 +822,7 @@ class MasterNode(Node):
         for group in groups:
             if len(group) < FRONTIER_THRESHOLD:
                 continue
-            
+
             # Extract the x and y coordinates
             x_coords = [w for h, w in group]
             y_coords = [h for h, w in group]
@@ -811,22 +832,22 @@ class MasterNode(Node):
             middle_y = sorted(y_coords)[len(y_coords) // 2]
 
             frontierPoints.append((middle_x, middle_y))
-            
+
         # self.get_logger().info("frontierPoints:" + str(frontierPoints))
-               
+
         # make a copy of the occupancy map
         self.frontierMap = self.dilutedOccupancyMap.copy()
-        
+
         # Set the value of the frontier to 4 and the frontier points to 5
         for pixel in frontier:
             self.frontierMap[pixel[0], pixel[1]] = 4
 
         for pixel in frontierPoints:
             self.frontierMap[pixel[1], pixel[0]] = 5
-            
+
         # set bot pixel to 0, y and x are flipped because image coordinates are (row, column)
         self.frontierMap[self.boty_pixel][self.botx_pixel] = 0
-            
+
         # # 0 = robot
         # # 1 = unmapped
         # # 2 = mapped and open
@@ -834,27 +855,27 @@ class MasterNode(Node):
         # # 4 = frontier
         # # 5 = frontier point
         # cmap = ListedColormap(['black', (85/255, 85/255, 85/255), (170/255, 170/255, 170/255), 'white', (0, 1, 1), (1, 0, 1)])
-        
+
         # plt.imshow(self.frontierMap, origin='lower', cmap=cmap)
-                
+
         # plt.draw_all()
         # # pause to make sure the plot gets created
         # plt.pause(0.00000000001)
 
 def main(args=None):
     rclpy.init(args=args)
-    
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Start the masterNode.')
     parser.add_argument('-s', type=str, default='n', help='Show plot (y/n)')
     args = parser.parse_args()
-    
+
     master_node = MasterNode(args.s)
-    
+
     if args.s == 'y':
         # create matplotlib figure
         plt.ion()
-        plt.figure()    
+        plt.figure()
     try:
         rclpy.spin(master_node)
     except KeyboardInterrupt:
