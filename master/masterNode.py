@@ -508,7 +508,7 @@ class MasterNode(Node):
                     
                 self.anglularVel_publisher.publish(anglularVel_msg)
                 
-                # if the bucket is hit, the state transistion and stopping will be done by the switch_listener_callback
+                # if the bucket is hit, the state transition and stopping will be done by the switch_listener_callback
             pass
         elif self.state == "releasing":      
             servoAngle_msg = UInt8()
@@ -602,9 +602,6 @@ class MasterNode(Node):
                 self.move_straight_to(tx, ty)
             elif mode == 1:
                 self.move_to(tx, ty)
-            elif mode == 2:
-                self.draw_occ_map_image()
-                self.state = "idle"
             else:
                 self.get_logger().info('mode %d does not exist' % mode)
                 
@@ -662,12 +659,12 @@ class MasterNode(Node):
         self.state = "maze_rotating"
 
     def find_path_to(self, tx, ty):    
-        # unmapped/osbstacle is 0, open space 1
+        # unmapped/obstacle is 0, open space 1
         ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
         
         # get grid coordination
-        sx = round((self.pos_x - self.map_origin_x) / self.map_res)
-        sy = round((self.pos_y - self.map_origin_y) / self.map_res)
+        sx = self.botx_pixel
+        sy = self.boty_pixel
         dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
         pre = [[(0, 0) for x in range(self.map_w)] for y in range(self.map_h)]
         dist[sy][sx] = 0
@@ -738,7 +735,7 @@ class MasterNode(Node):
             for j in range(self.map_w):
                 # Check if the current pixel is 1
                 if self.dilutedOccupancyMap[i, j] == 1:
-                    # check for diagonals also so BFS with UP, DOWN, LEFT, RIGHT can colect all frontier pixels
+                    # check for diagonals also so BFS with UP, DOWN, LEFT, RIGHT can collect all frontier pixels
                     for di in [-1, 0, 1]:
                         for dj in [-1, 0, 1]:
                             # Skip the current pixel
@@ -827,7 +824,7 @@ class MasterNode(Node):
         for pixel in frontierPoints:
             self.frontierMap[pixel[1], pixel[0]] = 5
             
-        # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+        # set bot pixel to 0, y and x are flipped because image coordinates are (row, column)
         self.frontierMap[self.boty_pixel][self.botx_pixel] = 0
             
         # # 0 = robot
