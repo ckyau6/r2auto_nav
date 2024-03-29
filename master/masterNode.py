@@ -172,9 +172,12 @@ class MasterNode(Node):
         
         self.dest_x = []
         self.dest_y = []
+        self.path = []
         
         self.lastPlot = time.time()
         self.lastState = time.time()
+        
+        self.frontierPoints = []
 
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
@@ -610,9 +613,9 @@ class MasterNode(Node):
                 
                 
         ''' ================================================ DEBUG PLOT ================================================ '''
-        if self.show_plot and len(self.frontierMap) > 0 and (time.time() - self.lastPlot) > 1:
+        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
             # shows the diluted occupancy map with frontiers and path planning points
-            self.totalMap = self.frontierMap.copy()
+            self.totalMap = self.dilutedOccupancyMap.copy()
             
             # 0 = robot
             # 1 = unmapped
@@ -620,13 +623,17 @@ class MasterNode(Node):
             # 3 = mapped and obstacle
             # 4 = frontier
             # 5 = frontier point
-            # 6 = path planning points
-            
-            for i in range(len(self.dest_x)):
-                self.totalMap[self.dest_y[i]][self.dest_x[i]] = 6
-                
+            # 6 = simplified path planning points
+                           
+            # Set the value of the frontier to 4 and the frontier points to 5
+            for pixel in self.frontier:
+                self.totalMap[pixel[0], pixel[1]] = 4
+
+            for pixel in self.frontierPoints:
+                self.totalMap[pixel[1], pixel[0]] = 5
+
             # if no path planning points, less colours
-            if len(self.dest_x) == 0:
+            if len(self.dest_x) == 0:                
                 cmap = ListedColormap(['black',
                                         (85/255, 85/255, 85/255), 
                                         (170/255, 170/255, 170/255), 
@@ -635,15 +642,22 @@ class MasterNode(Node):
                                         (1, 0, 1), 
                                         ])
             else:
+                # draw out simplified path planning points
+                for i in range(len(self.dest_x)):
+                        self.totalMap[self.dest_y[i]][self.dest_x[i]] = 6      
+                    
                 cmap = ListedColormap(['black',
                                         (85/255, 85/255, 85/255), 
                                         (170/255, 170/255, 170/255), 
                                         'white', 
                                         (0, 1, 1), 
                                         (1, 0, 1), 
-                                        (1, 1, 0)
+                                        (1, 165/255, 0),
                                         ])
-            
+                
+            # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+            self.totalMap[self.boty_pixel][self.botx_pixel] = 0
+                
             plt.imshow(self.totalMap, origin='lower', cmap=cmap)
                     
             plt.draw_all()
@@ -665,6 +679,7 @@ class MasterNode(Node):
         # unmapped/osbstacle is 0, open space 1
         ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
         
+        # Dijkstra's algorithm
         # get grid coordination
         sx = round((self.pos_x - self.map_origin_x) / self.map_res)
         sy = round((self.pos_y - self.map_origin_y) / self.map_res)
@@ -707,15 +722,21 @@ class MasterNode(Node):
             ty, tx = pre[ty][tx]
         res_x.reverse()
         res_y.reverse()
+        self.get_logger().info(str(res_x))
+        self.get_logger().info(str(res_y))
+        
         return res_x, res_y
         
-        
-
     def move_to(self, tx, ty):
         self.get_logger().info('currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
-        self.get_logger().info('path finding finished')
-        self.state = "maze_moving"
+        
+        if len(self.dest_x) == 0:
+            self.get_logger().info('no path found')
+            self.state = "idle"
+        else:
+            self.get_logger().info('path finding finished')
+            self.state = "maze_moving"
         
     def frontierSearch(self):      
         if len(self.dilutedOccupancyMap) == 0:
@@ -731,7 +752,7 @@ class MasterNode(Node):
         ''' ================================================ Frontier Search ================================================ '''      
         # frontier is between 1 = unmapped and 2 = mapped and open
         
-        frontier = []
+        self.frontier = []
 
         # Iterate over the array
         for i in range(self.map_h):
@@ -748,101 +769,76 @@ class MasterNode(Node):
                             if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w:
                                 # Check if the neighboring pixel is 2
                                 if self.dilutedOccupancyMap[i + di, j + dj] == 2:
-                                    frontier.append((i, j))
+                                    self.frontier.append((i, j))
                                     # self.get_logger().info(str("Pixel 1 at (" + str(i) + ", " + str(j) + ") is next to pixel 2 at (" + str(i + di) + ", " + str(j + dj) + ")" ))
         
-        # BFS to find all frontier groups
-        # Initialize the queue with the first pixel
-        queue = deque([frontier[0]])
+        # check if frontier is empty
+        if len(self.frontier) == 0:
+            self.frontierPoints = []
+        else:
+            # BFS to find all frontier groups
+            # Initialize the queue with the first pixel
+            queue = deque([self.frontier[0]])
 
-        # Initialize the set of visited pixels
-        visited = set([frontier[0]])
+            # Initialize the set of visited pixels
+            visited = set([self.frontier[0]])
 
-        # Initialize the list of groups
-        groups = []
+            # Initialize the list of groups
+            groups = []
 
-        # Perform the BFS
-        while queue:
-            # Start a new group
-            group = []
-
-            # Process all pixels in the current group
+            # Perform the BFS
             while queue:
-                i, j = queue.popleft()
-                group.append((i, j))
+                # Start a new group
+                group = []
 
-                # Check the neighboring pixels
-                for di in [-1, 0, 1]:
-                    for dj in [-1, 0, 1]:
-                        # Skip the current pixel and diagonal pixels
-                        if (di == 0 and dj == 0) or (di != 0 and dj != 0):
-                            continue
+                # Process all pixels in the current group
+                while queue:
+                    i, j = queue.popleft()
+                    group.append((i, j))
 
-                        # Check if the neighboring pixel is inside the image and in the frontier
-                        if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w and (i + di, j + dj) in frontier:
-                            # Check if the neighboring pixel has not been visited yet
-                            if (i + di, j + dj) not in visited:
-                                # Add the neighboring pixel to the queue and the set of visited pixels
-                                queue.append((i + di, j + dj))
-                                visited.add((i + di, j + dj))
+                    # Check the neighboring pixels
+                    for di in [-1, 0, 1]:
+                        for dj in [-1, 0, 1]:
+                            # Skip the current pixel and diagonal pixels
+                            if (di == 0 and dj == 0) or (di != 0 and dj != 0):
+                                continue
 
-            # Add the group to the list of groups
-            groups.append(group)
+                            # Check if the neighboring pixel is inside the image and in the frontier
+                            if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w and (i + di, j + dj) in self.frontier:
+                                # Check if the neighboring pixel has not been visited yet
+                                if (i + di, j + dj) not in visited:
+                                    # Add the neighboring pixel to the queue and the set of visited pixels
+                                    queue.append((i + di, j + dj))
+                                    visited.add((i + di, j + dj))
 
-            # Find the next unvisited pixel in the frontier
-            for pixel in frontier:
-                if pixel not in visited:
-                    queue.append(pixel)
-                    visited.add(pixel)
-                    break
-               
-        # find frontier points if the frontier group has more than FRONTIER_THRESHOLD points        
-        # Initialize the list of frontier points
-        frontierPoints = []
+                # Add the group to the list of groups
+                groups.append(group)
 
-        # Iterate over the groups
-        for group in groups:
-            if len(group) < FRONTIER_THRESHOLD:
-                continue
-            
-            # Extract the x and y coordinates
-            x_coords = [w for h, w in group]
-            y_coords = [h for h, w in group]
-
-            # Calculate the middle x and y coordinates
-            middle_x = sorted(x_coords)[len(x_coords) // 2]
-            middle_y = sorted(y_coords)[len(y_coords) // 2]
-
-            frontierPoints.append((middle_x, middle_y))
-            
-        # self.get_logger().info("frontierPoints:" + str(frontierPoints))
-               
-        # make a copy of the occupancy map
-        self.frontierMap = self.dilutedOccupancyMap.copy()
-        
-        # Set the value of the frontier to 4 and the frontier points to 5
-        for pixel in frontier:
-            self.frontierMap[pixel[0], pixel[1]] = 4
-
-        for pixel in frontierPoints:
-            self.frontierMap[pixel[1], pixel[0]] = 5
-            
-        # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
-        self.frontierMap[self.boty_pixel][self.botx_pixel] = 0
-            
-        # # 0 = robot
-        # # 1 = unmapped
-        # # 2 = mapped and open
-        # # 3 = mapped and obstacle
-        # # 4 = frontier
-        # # 5 = frontier point
-        # cmap = ListedColormap(['black', (85/255, 85/255, 85/255), (170/255, 170/255, 170/255), 'white', (0, 1, 1), (1, 0, 1)])
-        
-        # plt.imshow(self.frontierMap, origin='lower', cmap=cmap)
+                # Find the next unvisited pixel in the frontier
+                for pixel in self.frontier:
+                    if pixel not in visited:
+                        queue.append(pixel)
+                        visited.add(pixel)
+                        break
                 
-        # plt.draw_all()
-        # # pause to make sure the plot gets created
-        # plt.pause(0.00000000001)
+            # find frontier points if the frontier group has more than FRONTIER_THRESHOLD points        
+            # Initialize the list of frontier points
+            self.frontierPoints = []
+
+            # Iterate over the groups
+            for group in groups:
+                if len(group) < FRONTIER_THRESHOLD:
+                    continue
+                
+                # Extract the x and y coordinates
+                x_coords = [w for h, w in group]
+                y_coords = [h for h, w in group]
+
+                # Calculate the middle x and y coordinates
+                middle_x = sorted(x_coords)[len(x_coords) // 2]
+                middle_y = sorted(y_coords)[len(y_coords) // 2]
+
+                self.frontierPoints.append((middle_x, middle_y))
 
 def main(args=None):
     rclpy.init(args=args)
