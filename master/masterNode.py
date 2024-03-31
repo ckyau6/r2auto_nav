@@ -280,6 +280,14 @@ class MasterNode(Node):
         # recalculate path
         if len(self.dest_x) > 0:
             new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
+            if len(new_dest_x) == 0:
+                self.get_logger().info('no path found')
+                self.state = 'idle'
+                return
+            # remove the current position which lies at the front of array
+            if len(new_dest_x) > 1:
+                new_dest_x = new_dest_x[1:]
+                new_dest_y = new_dest_y[1:]
             if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
                 self.get_logger().info('path updated')
                 # if the first target point changes, stop once and move again
