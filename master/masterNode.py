@@ -281,7 +281,7 @@ class MasterNode(Node):
         if len(self.dest_x) > 0:
             new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
             if len(new_dest_x) == 0:
-                self.get_logger().info('no path found')
+                self.get_logger().warn('[occ_callback]: no path found')
                 self.state = 'idle'
                 return
             # remove the current position which lies at the front of array
@@ -289,7 +289,7 @@ class MasterNode(Node):
                 new_dest_x = new_dest_x[1:]
                 new_dest_y = new_dest_y[1:]
             if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
-                self.get_logger().info('path updated')
+                self.get_logger().info('[occ_callback]: path updated')
                 # if the first target point changes, stop once and move again
                 if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
                     # set linear to be zero
@@ -469,7 +469,7 @@ class MasterNode(Node):
                         self.state = "checking_walls_distance"
 
         elif self.state == "rotating_to_bucket":
-            # if close to forward, go to next state, else allign to bucket first
+            # if close to forward, go to next state, else align to bucket first
             if abs(self.bucketAngle) < 2:
                 self.get_logger().info('[rotating_to_bucket]: close enough, moving to bucket now')
                 self.state = "moving_to_bucket"
@@ -584,6 +584,7 @@ class MasterNode(Node):
                 self.dest_y = self.dest_y[1:]
                 
                 if len(self.dest_x) == 0:
+                    self.get_logger().info('[maze_moving]: no more destination; get back to idle')
                     self.state = "idle"
                 else:
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
@@ -626,6 +627,24 @@ class MasterNode(Node):
             #     self.get_logger().info('[maze_moving]: moving forward')
                 
             # self.anglularVel_publisher.publish(anglularVel_msg)
+        elif self.state == "frontier_search":
+            if len(self.frontierPoints) == 0:
+                self.get_logger().warn('[frontier_search]: no frontier points!!!; get back to idle')
+                self.state = "idle"
+                return
+
+            # compare two frontier points and judge which we go first
+            # return True if p1 has higher priority than p2
+            def cmp(p1, p2):
+                return True
+
+            destination = self.frontierPoints[0]
+            for i in range(1, len(self.frontierPoints)):
+                if cmp(self.frontierPoints[i], destination):
+                    destination = self.frontierPoints[i]
+
+            self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
+
         else:
             mode, tx, ty = map(int, self.state.split())
             if mode == 0:
@@ -694,7 +713,7 @@ class MasterNode(Node):
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
-        self.get_logger().info('currently at (%d %d), moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
+        self.get_logger().info('[move_straight_to]: currently at (%d %d), moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
         # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
         deltaAngle = Float64()
         deltaAngle.data = target_yaw - self.yaw
@@ -737,7 +756,7 @@ class MasterNode(Node):
                         dist[ny][nx] = nd
                         pre[ny][nx] = (y, x)
                         heapq.heappush(pq, (nd, ny, nx))
-        self.get_logger().info('distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
+        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
         res_x = []
         res_y = []
         while True:
@@ -751,14 +770,14 @@ class MasterNode(Node):
         return res_x, res_y
 
     def move_to(self, tx, ty):
-        self.get_logger().info('currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
+        self.get_logger().info('[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
 
         if len(self.dest_x) == 0:
-            self.get_logger().info('no path found')
+            self.get_logger().warn('[move_to]: no path found')
             self.state = "idle"
         else:
-            self.get_logger().info('path finding finished')
+            self.get_logger().info('[move_to]: path finding finished')
             self.state = "maze_moving"
         
     def frontierSearch(self):      
