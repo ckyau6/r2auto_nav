@@ -44,7 +44,7 @@ class DoorHandler(Node):
     def publisher_callback(self):
         msg = String()
         
-        # if ESP is online publish intended door status, else publish connection error
+        # if ESP is onlineD publish intended door status, else publish connection error
         if self.httpESP.pingESP():
             msg.data = self.statsToPublish
         else:
