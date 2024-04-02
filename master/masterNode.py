@@ -636,7 +636,7 @@ class MasterNode(Node):
             # compare two frontier points and judge which we go first
             # return True if p1 has higher priority than p2
             def cmp(p1, p2):
-                return True
+                return p1[0] < p2[0]
 
             destination = self.frontierPoints[0]
             for i in range(1, len(self.frontierPoints)):
