@@ -15,7 +15,7 @@ import heapq
 
 import argparse
 from collections import deque
-from scipy.ndimage import binary_dilation
+from skimage.morphology import dilation, disk
 
 import time
 
@@ -25,13 +25,39 @@ occ_bins = [-1, 0, 50, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 5 #TESTING
+CLEARANCE_RADIUS = 10
 
 FRONTIER_THRESHOLD = 5
 
-NAV_TOO_CLOSE = 0.20
+NAV_TOO_CLOSE = 0.30
 
 BUCKET_TOO_CLOSE = 0.35
+
+BUCKET_FRONT_RANGE = 10
+BUCKET_FRONT_LEFT_ANGLE = 0 + BUCKET_FRONT_RANGE
+BUCKET_FRONT_RIGHT_ANGLE = 360 - BUCKET_FRONT_RANGE
+
+LEFT_RIGHT_ANGLE_RANGE = 5
+LEFT_UPPER_ANGLE = 90 - LEFT_RIGHT_ANGLE_RANGE
+LEFT_LOWER_ANGLE = 90 + LEFT_RIGHT_ANGLE_RANGE
+RIGHT_LOWER_ANGLE = 270 - LEFT_RIGHT_ANGLE_RANGE
+RIGHT_UPPER_ANGLE = 270 + LEFT_RIGHT_ANGLE_RANGE
+
+BACK_ANGLE_RANGE = 5
+BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
+BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
+
+MAZE_FRONT_RANGE = 20
+MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
+MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
+
+MAZE_CLEARANCE_ANGLE = 10
+MAZE_ROTATE_SPEED = 64
+
+# left, right door and finish line coords in meters from the magic origin
+LEFT_DOOR_COORDS_M = (1.20, 2.70)
+RIGHT_DOOR_COORDS_M = (1.90, 2.70)
+FINISH_LINE_M = 2.10
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -118,6 +144,10 @@ class MasterNode(Node):
         self.map_res = 0.05
         self.map_w = self.map_h = 0
 
+        self.leftDoor_pixel = (0, 0)
+        self.rightDoor_pixel = (0, 0)
+        self.finishLine_Ypixel = 0
+
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
         self.pos_subscription = self.create_subscription(
@@ -179,6 +209,8 @@ class MasterNode(Node):
 
         self.frontierPoints = []
 
+        self.robotControlNodeState = ""
+
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
         self.doorStatus = msg.data
@@ -222,18 +254,21 @@ class MasterNode(Node):
         # store the len since it changes
         self.range_len = len(self.laser_range)
         # self.get_logger().info(str(self.laser_range))
+
+        self.bucketFrontLeftIndex = self.angle_to_index(BUCKET_FRONT_LEFT_ANGLE, self.range_len)
+        self.bucketFrontRightIndex = self.angle_to_index(BUCKET_FRONT_RIGHT_ANGLE, self.range_len)
+
+        self.leftIndexL = self.angle_to_index(LEFT_UPPER_ANGLE, self.range_len)
+        self.leftIndexH = self.angle_to_index(LEFT_LOWER_ANGLE, self.range_len)
         
-        self.frontLeftIndex = self.angle_to_index(10, self.range_len)
-        self.frontRightIndex = self.angle_to_index(350, self.range_len)
+        self.rightIndexL = self.angle_to_index(RIGHT_LOWER_ANGLE, self.range_len)
+        self.rightIndexH = self.angle_to_index(RIGHT_UPPER_ANGLE, self.range_len)
         
-        self.leftIndexL = self.angle_to_index(90-5, self.range_len)
-        self.leftIndexH = self.angle_to_index(90+5, self.range_len)
+        self.backIndexL = self.angle_to_index(BACK_LOWER_ANGLE, self.range_len)
+        self.backIndexH = self.angle_to_index(BACK_UPPER_ANGLE, self.range_len)
         
-        self.rightIndexL = self.angle_to_index(270-5, self.range_len)
-        self.rightIndexH = self.angle_to_index(270+5, self.range_len)
-        
-        self.backIndexL = self.angle_to_index(180-5, self.range_len)
-        self.backIndexH = self.angle_to_index(180+5, self.range_len)
+        self.mazeFrontLeftindex = self.angle_to_index(MAZE_FRONT_LEFT_ANGLE, self.range_len)
+        self.mazeFrontRightindex = self.angle_to_index(MAZE_FRONT_RIGHT_ANGLE, self.range_len)
         
     def bucketAngle_listener_callback(self, msg):
         self.bucketAngle = msg.data
@@ -258,22 +293,37 @@ class MasterNode(Node):
         # pixelExpend = numbers of pixel to expend by
         pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))  
         
-        # Create a binary mask where only cells with a value of 3 are True, since we want to dilate the obstacles
-        mask = (self.occupancyMap == 3)
+        OPEN = 2
+        OBSTACLE = 3
 
-        # Perform the dilation on the mask
-        dilated_mask = binary_dilation(mask, iterations=pixelExpend)
+        # Create a mask of the OPEN areas
+        open_mask = (self.occupancyMap == OPEN)
 
-        # Create a copy of the original occupancy map
-        self.dilutedOccupancyMap = self.occupancyMap.copy()
+        # Create a mask of the OBSTACLE areas
+        obstacle_mask = (self.occupancyMap == OBSTACLE)
 
-        # Apply the dilated mask to the copy, setting cells to 3 where the mask is True
-        self.dilutedOccupancyMap[dilated_mask] = 3
+        # Create a structuring element for the dilation
+        selem = disk(pixelExpend)
+
+        # Perform the dilation
+        dilated = dilation(obstacle_mask, selem)
+
+        # Apply the dilation only within the OPEN areas
+        self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
         
         # this gives the locations of bot in the occupancy map, in pixel
         self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
         self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
         
+        # this gives the locations of magic origin in the occupancy map, in pixel
+        self.magicOriginx_pixel = round((-self.map_origin_x) / self.map_res)
+        self.magicOriginy_pixel = round((-self.map_origin_y) / self.map_res)
+
+        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
+        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
+
         # find frontier points
         self.frontierSearch()
 
@@ -406,7 +456,7 @@ class MasterNode(Node):
                 # move until the back is more than 40 cm or stop if the front is less than 30 cm
                 # 40cm must be more than the 30cm from smallest distance, so that it wont rotate and get diff distance, lidar is not the center of rotation
                 # must use any not all incase of NaN
-                if any(self.laser_range[0:self.frontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.frontRightIndex:] < BUCKET_TOO_CLOSE):
+                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketfFrontRightIndex:] < BUCKET_TOO_CLOSE):
                     # infront got something
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
                     
@@ -593,10 +643,53 @@ class MasterNode(Node):
             self.recalc_stat += 1
             
             # recalculate target angle if reach recalc_freq
+            # this takes care both for obstacles and re aiming to target coords
             if self.recalc_stat == self.recalc_freq:
                 self.recalc_stat = 0
+
+                # # if obstacle in front and close to both sides, rotate to move beteween the two
+                # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+
+                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
+                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
+
+                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
+                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+
+                #     # target angle will be in between the two angles
+                #     targetAngle = (minAngleleft + minAngleRight) / 2
+                #     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
+
+                # # else if obstacle in front and close to left, rotate right
+                # elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
+
+                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
+                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
+
+                #     # target angle is the angle such that obstacle is no longer in the range of left
+                #     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
+                #     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
+
+                # # else if obstacle in front and close to right, rotate left
+                # elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+
+                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
+                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+
+                #     # target angle is the angle such that obstacle is no longer in the range of left
+                #     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
+                #     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
+
+                # # else recalculate target angle for next way point
+                # else:
                 target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
                 
+                deltaAngle = target_yaw - self.yaw
+
                 # set linear to be zero
                 linear_msg = Int8()
                 linear_msg.data = 0
@@ -604,29 +697,11 @@ class MasterNode(Node):
                 
                 # set delta angle to rotate to target angle
                 deltaAngle_msg = Float64()
-                deltaAngle_msg.data = (target_yaw - self.yaw) * 1.0
+                deltaAngle_msg.data = deltaAngle * 1.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
                 self.state = "maze_rotating"
-                return
-            
-            # # if left got something, rotate right
-            # # elif right got something, rotate left
-            # # else go straight
-            
-            # anglularVel_msg = Int8()
-            
-            # if all(self.laser_range[self.leftIndexL:self.leftIndexH] < NAV_TOO_CLOSE):
-            #     anglularVel_msg.data = -127
-            #     self.get_logger().info('[maze_moving]: moving forward and right')
-            # elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < NAV_TOO_CLOSE):
-            #     anglularVel_msg.data = 127
-            #     self.get_logger().info('[maze_moving]: moving forward and left')
-            # else:
-            #     anglularVel_msg.data = 0
-            #     self.get_logger().info('[maze_moving]: moving forward')
-                
-            # self.anglularVel_publisher.publish(anglularVel_msg)
+
         elif self.state == "frontier_search":
             if len(self.frontierPoints) == 0:
                 self.get_logger().warn('[frontier_search]: no frontier points!!!; get back to idle')
@@ -660,49 +735,81 @@ class MasterNode(Node):
                 
         ''' ================================================ DEBUG PLOT ================================================ '''
         if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
+            # Pixel values
+            ROBOT = 0
+            UNMAPPED = 1
+            OPEN = 2
+            OBSTACLE = 3
+            MAGIC_ORIGIN = 4
+            ESTIMATE_DOOR = 5
+            FINISH_LINE = 6
+            FRONTIER = 7
+            FRONTIER_POINT = 8
+            PATH_PLANNING_POINT = 9
+
             # shows the diluted occupancy map with frontiers and path planning points
             self.totalMap = self.dilutedOccupancyMap.copy()
             
-            # 0 = robot
-            # 1 = unmapped
-            # 2 = mapped and open
-            # 3 = mapped and obstacle
-            # 4 = frontier
-            # 5 = frontier point
-            # 6 = simplified path planning points
+            # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
+            TARGET_SIZE_M = 5
+            TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
 
-            # Set the value of the frontier to 4 and the frontier points to 5
+            # Calculate the necessary padding
+            padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
+            padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+
+            # Define the number of pixels to add to the height and width
+            padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+            padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+
+            # Pad the image
+            self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
+
+            # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
+            self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
+            self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
+
+            self.totalMap[self.finishLine_Ypixel, :] = FINISH_LINE
+
+            # Set the value of the frontier and the frontier points
             for pixel in self.frontier:
-                self.totalMap[pixel[0], pixel[1]] = 4
+                self.totalMap[pixel[0], pixel[1]] = FRONTIER
 
             for pixel in self.frontierPoints:
-                self.totalMap[pixel[1], pixel[0]] = 5
+                self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
 
-            # if no path planning points, less colours
-            if len(self.dest_x) == 0:
-                cmap = ListedColormap(['black',
-                                        (85/255, 85/255, 85/255), 
-                                        (170/255, 170/255, 170/255), 
-                                        'white', 
-                                        (0, 1, 1), 
-                                        (1, 0, 1), 
-                                        ])
-            else:
-                # draw out simplified path planning points
-                for i in range(len(self.dest_x)):
-                        self.totalMap[self.dest_y[i]][self.dest_x[i]] = 6
+            # Set the value for the path planning points
+            for i in range(len(self.dest_x)):
+                self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
 
-                cmap = ListedColormap(['black',
-                                        (85/255, 85/255, 85/255), 
-                                        (170/255, 170/255, 170/255), 
-                                        'white', 
-                                        (0, 1, 1), 
-                                        (1, 0, 1), 
-                                        (1, 165/255, 0),
-                                        ])
+            colourList = ['black',
+                          (85/255, 85/255, 85/255),         # dark grey
+                          (170/255, 170/255, 170/255),      # light grey
+                          'white',
+                          (50/255, 205/255, 50/255),        # lime green
+                          (1, 1, 0),                        # yellow
+                          (0, 1, 0)                         # green
+                          ]
 
+            # add in colours for each type of pixel
+            if len(self.frontier) > 0:
+                colourList.append((0, 1, 1))    # cyan
+
+            if len(self.frontierPoints) > 0:
+                colourList.append((1, 0, 1))    # magenta
+
+            if len(self.dest_x) > 0:
+                colourList.append((1, 165/255, 0))   # orange
+                
             # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
-            self.totalMap[self.boty_pixel][self.botx_pixel] = 0
+            self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
+
+            # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
+            self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
+
+            # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin
+
+            cmap = ListedColormap(colourList)
 
             plt.imshow(self.totalMap, origin='lower', cmap=cmap)
                     
@@ -758,18 +865,22 @@ class MasterNode(Node):
                         pre[ny][nx] = (y, x)
                         heapq.heappush(pq, (nd, ny, nx))
         self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
-        res_x = []
-        res_y = []
-        while True:
-            res_x.append(tx)
-            res_y.append(ty)
-            if ty == sy and tx == sx:
-                break
-            ty, tx = pre[ty][tx]
-        res_x.reverse()
-        res_y.reverse()
-        return res_x, res_y
 
+        if dist[ty][tx] == 1e18:
+            return [], []
+        else:
+            res_x = []
+            res_y = []
+            while True:
+                res_x.append(tx)
+                res_y.append(ty)
+                if ty == sy and tx == sx:
+                    break
+                ty, tx = pre[ty][tx]
+            res_x.reverse()
+            res_y.reverse()
+            return res_x, res_y
+        
     def move_to(self, tx, ty):
         self.get_logger().info('[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
@@ -800,9 +911,9 @@ class MasterNode(Node):
         # Iterate over the array
         for i in range(self.map_h):
             for j in range(self.map_w):
-                # Check if the current pixel is 1
-                if self.dilutedOccupancyMap[i, j] == 1:
-                    # check for diagonals also so BFS with UP, DOWN, LEFT, RIGHT can collect all frontier pixels
+                # Check if the current pixel is 2
+                if self.dilutedOccupancyMap[i, j] == 2:
+                    # check for diagonals also so BFS with UP, DOWN, LEFT, RIGHT can colect all frontier pixels
                     for di in [-1, 0, 1]:
                         for dj in [-1, 0, 1]:
                             # Skip the current pixel
@@ -810,8 +921,8 @@ class MasterNode(Node):
                                 continue
                             # Check if the neighboring pixel is inside the image
                             if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w:
-                                # Check if the neighboring pixel is 2
-                                if self.dilutedOccupancyMap[i + di, j + dj] == 2:
+                                # Check if the neighboring pixel is 1
+                                if self.dilutedOccupancyMap[i + di, j + dj] == 1:
                                     self.frontier.append((i, j))
                                     # self.get_logger().info(str("Pixel 1 at (" + str(i) + ", " + str(j) + ") is next to pixel 2 at (" + str(i + di) + ", " + str(j + dj) + ")" ))
         
