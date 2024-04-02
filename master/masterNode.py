@@ -54,6 +54,11 @@ MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 MAZE_CLEARANCE_ANGLE = 10
 MAZE_ROTATE_SPEED = 64
 
+# left, right door and finish line coords in meters from the magic origin
+LEFT_DOOR_COORDS_M = (1.20, 2.70)
+RIGHT_DOOR_COORDS_M = (1.90, 2.70)
+FINISH_LINE_M = 2.10
+
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
     t3 = +2.0 * (w * z + x * y)
@@ -138,6 +143,10 @@ class MasterNode(Node):
         self.yaw = 0
         self.map_res = 0.05
         self.map_w = self.map_h = 0
+
+        self.leftDoor_pixel = (0, 0)
+        self.rightDoor_pixel = (0, 0)
+        self.finishLine_Ypixel = 0
 
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
@@ -303,6 +312,11 @@ class MasterNode(Node):
         # this gives the locations of magic origin in the occupancy map, in pixel
         self.magicOriginx_pixel = round((-self.map_origin_x) / self.map_res)
         self.magicOriginy_pixel = round((-self.map_origin_y) / self.map_res)
+        
+        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
+        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
         
         # find frontier points
         self.frontierSearch()
@@ -701,44 +715,71 @@ class MasterNode(Node):
                 
         ''' ================================================ DEBUG PLOT ================================================ '''        
         if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
-            # shows the diluted occupancy map with frontiers and path planning points
-            self.totalMap = self.dilutedOccupancyMap.copy()
-            
+            # Pixel values
             ROBOT = 0
             UNMAPPED = 1
             OPEN = 2
             OBSTACLE = 3
             MAGIC_ORIGIN = 4
-            FRONTIER = 5
-            FRONTIER_POINT = 6
-            PATH_PLANNING_POINT = 7
+            ESTIMATE_DOOR = 5
+            FINISH_LINE = 6
+            FRONTIER = 7
+            FRONTIER_POINT = 8
+            PATH_PLANNING_POINT = 9
+            
+            # shows the diluted occupancy map with frontiers and path planning points
+            self.totalMap = self.dilutedOccupancyMap.copy()
+            
+            # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
+            TARGET_SIZE_M = 5
+            TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
+            
+            # Calculate the necessary padding
+            padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
+            padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+            
+            # Define the number of pixels to add to the height and width
+            padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+            padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+
+            # Pad the image
+            self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
+            
+            # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
+            self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
+            self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
+                        
+            self.totalMap[self.finishLine_Ypixel, :] = FINISH_LINE
                            
-            # Set the value of the frontier to 4 and the frontier points to 5
+            # Set the value of the frontier and the frontier points
             for pixel in self.frontier:
                 self.totalMap[pixel[0], pixel[1]] = FRONTIER
 
             for pixel in self.frontierPoints:
                 self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
                 
+            # Set the value for the path planning points
             for i in range(len(self.dest_x)):
                 self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
         
             colourList = ['black',
-                          (85/255, 85/255, 85/255), 
-                          (170/255, 170/255, 170/255), 
+                          (85/255, 85/255, 85/255),         # dark grey
+                          (170/255, 170/255, 170/255),      # light grey
                           'white',
-                          (50/255, 205/255, 50/255),
+                          (50/255, 205/255, 50/255),        # lime green
+                          (1, 1, 0),                        # yellow
+                          (0, 1, 0)                         # green                        
                           ]
                 
             # add in colours for each type of pixel
             if len(self.frontier) > 0:
-                colourList.append((0, 1, 1))
+                colourList.append((0, 1, 1))    # cyan
                 
             if len(self.frontierPoints) > 0:
-                colourList.append((1, 0, 1))
+                colourList.append((1, 0, 1))    # magenta
                 
             if len(self.dest_x) > 0:
-                colourList.append((1, 165/255, 0))
+                colourList.append((1, 165/255, 0))   # orange
                 
             # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
             self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
@@ -746,7 +787,7 @@ class MasterNode(Node):
             # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
             self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
             
-            # MAGIC_ORIGIN will override ROBOT and colour will be weird
+            # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin 
                        
             cmap = ListedColormap(colourList)
 
