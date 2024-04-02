@@ -644,6 +644,7 @@ class MasterNode(Node):
                     destination = self.frontierPoints[i]
 
             self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
+            self.move_to(destination[0], destination[1])
 
         else:
             mode, tx, ty = map(int, self.state.split())
