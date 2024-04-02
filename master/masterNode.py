@@ -15,7 +15,7 @@ import heapq
 
 import argparse
 from collections import deque
-from scipy.ndimage import binary_dilation
+from skimage.morphology import dilation, disk
 
 import time
 
@@ -293,17 +293,23 @@ class MasterNode(Node):
         # pixelExpend = numbers of pixel to expend by
         pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))  
         
-        # Create a binary mask where only cells with a value of 3 are True, since we want to dilate the obstacles
-        mask = (self.occupancyMap == 3)
+        OPEN = 2
+        OBSTACLE = 3
+        
+        # Create a mask of the OPEN areas
+        open_mask = (self.occupancyMap == OPEN)
 
-        # Perform the dilation on the mask
-        dilated_mask = binary_dilation(mask, iterations=pixelExpend)
+        # Create a mask of the OBSTACLE areas
+        obstacle_mask = (self.occupancyMap == OBSTACLE)
 
-        # Create a copy of the original occupancy map
-        self.dilutedOccupancyMap = self.occupancyMap.copy()
+        # Create a structuring element for the dilation
+        selem = disk(pixelExpend)
 
-        # Apply the dilated mask to the copy, setting cells to 3 where the mask is True
-        self.dilutedOccupancyMap[dilated_mask] = 3
+        # Perform the dilation
+        dilated = dilation(obstacle_mask, selem)
+
+        # Apply the dilation only within the OPEN areas
+        self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
         
         # this gives the locations of bot in the occupancy map, in pixel
         self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
