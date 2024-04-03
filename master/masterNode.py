@@ -414,6 +414,175 @@ class MasterNode(Node):
             switch_msg = String()
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
+            
+        elif self.state == "maze_rotating":
+            # self.get_logger().info('current yaw: %f' % self.yaw)
+            if self.robotControlNodeState == "rotateStop":
+                # set linear to start moving forward
+                linear_msg = Int8()
+                linear_msg.data = self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                
+                self.state = "maze_moving"
+                
+                # reset recalc_stat
+                self.recalc_stat = 0
+                
+        elif self.state == "maze_moving":
+            # if reached the destination (within one pixel), stop and move to the next destination
+            if abs(self.botx_pixel - self.dest_x[0]) <= 1 and abs(self.boty_pixel - self.dest_y[0]) <= 1:
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                self.get_logger().info('[maze_moving]: finished moving')
+                
+                self.dest_x = self.dest_x[1:]
+                self.dest_y = self.dest_y[1:]
+                
+                if len(self.dest_x) == 0:
+                    self.state = "idle"
+                else:
+                    self.move_straight_to(self.dest_x[0], self.dest_y[0])
+                return
+            
+            self.recalc_stat += 1
+            
+            # recalculate target angle if reach recalc_freq
+            # this takes care both for obstacles and re aiming to target coords
+            if self.recalc_stat == self.recalc_freq:
+                self.recalc_stat = 0
+                
+                # # if obstacle in front and close to both sides, rotate to move beteween the two
+                # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                    
+                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
+                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
+
+                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
+                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+
+                #     # target angle will be in between the two angles
+                #     targetAngle = (minAngleleft + minAngleRight) / 2
+                #     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
+                    
+                # # else if obstacle in front and close to left, rotate right
+                # elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
+                    
+                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
+                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
+                    
+                #     # target angle is the angle such that obstacle is no longer in the range of left
+                #     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
+                #     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
+                
+                # # else if obstacle in front and close to right, rotate left
+                # elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                    
+                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
+                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+                    
+                #     # target angle is the angle such that obstacle is no longer in the range of left
+                #     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
+                #     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
+    
+                # # else recalculate target angle for next way point
+                # else:
+                target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
+                
+                deltaAngle = target_yaw - self.yaw
+                    
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle to rotate to target angle
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = deltaAngle * 1.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                self.state = "maze_rotating"
+
+            # else:
+            #     # Calculate the average distance to obstacles on the left, right, and front
+            #     left_avg = np.mean(self.laser_range[self.leftIndexL:self.leftIndexH])
+            #     right_avg = np.mean(self.laser_range[self.rightIndexL:self.rightIndexH])
+
+            #     anglularVel_msg = Int8()
+                
+            #     # if both side are too close, move away from the close one
+            #     if left_avg < NAV_TOO_CLOSE and right_avg < NAV_TOO_CLOSE:
+            #         if left_avg < right_avg:
+            #             anglularVel_msg.data = MAZE_ROTATE_SPEED
+            #             self.get_logger().info('[maze_moving]: obstacle on left, turning right')
+            #         else:
+            #             anglularVel_msg.data = -MAZE_ROTATE_SPEED
+            #             self.get_logger().info('[maze_moving]: obstacle on right, turning left')
+                        
+            #     # If there's an obstacle too close on the left, turn right
+            #     elif left_avg < NAV_TOO_CLOSE:
+            #         anglularVel_msg.data = -MAZE_ROTATE_SPEED
+            #         self.get_logger().info('[maze_moving]: obstacle on left, turning right')
+                    
+            #     # If there's an obstacle too close on the right, turn left
+            #     elif right_avg < NAV_TOO_CLOSE:
+            #         anglularVel_msg.data = MAZE_ROTATE_SPEED
+            #         self.get_logger().info('[maze_moving]: obstacle on right, turning left')
+                    
+            #     # Otherwise, go straight
+            #     else:
+            #         anglularVel_msg.data = 0
+            #         self.get_logger().info('[maze_moving]: moving forward')
+
+            #     self.anglularVel_publisher.publish(anglularVel_msg)
+            
+        elif self.state == "http_request":
+            if self.doorStatus == "idle":
+                # send openDoor request
+                door_msg = String()
+                door_msg.data = "openDoor"
+                self.http_publisher.publish(door_msg)
+                self.get_logger().info('[http_request]: opening door')
+                
+            elif self.doorStatus == "door1":
+                self.get_logger().info('[http_request]: door1 opened')
+                self.state = "go_to_left_door"
+            
+            elif self.doorStatus == "door2":
+                self.get_logger().info('[http_request]: door2 opened')
+                self.state = "go_to_right_door"
+                
+            elif self.doorStatus == "connection error":
+                self.get_logger().info('[http_request]: connection error')
+                
+            elif self.doorStatus == "http error":
+                self.get_logger().info('[http_request]: http error')
+            
+            else:
+                self.get_logger().info('[http_request]: msg error')
+                
+        elif self.state == "go_to_left_door":
+            pass
+            
+        elif self.state == "go_to_right_door":
+            pass
+            
+        elif self.state == "enter_left_door":
+            pass
+            
+        elif self.state == "enter_right_door":
+            pass
 
         elif self.state == "checking_walls_distance":
             # lidar minimum is 12 cm send by node, datasheet says 16 cm
