@@ -21,13 +21,13 @@ import time
 
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
-occ_bins = [-1, 0, 50, 100]
+occ_bins = [-1, 0, 60, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
 CLEARANCE_RADIUS = 10
 
-FRONTIER_THRESHOLD = 5
+FRONTIER_THRESHOLD = 3
 
 NAV_TOO_CLOSE = 0.30
 
@@ -58,6 +58,9 @@ MAZE_ROTATE_SPEED = 64
 LEFT_DOOR_COORDS_M = (1.20, 2.70)
 RIGHT_DOOR_COORDS_M = (1.90, 2.70)
 FINISH_LINE_M = 2.10
+
+# to avoid oscillation, in second, no point 1s since occ map is 1s
+PATH_UPDATE_PERIOD = 5
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -179,6 +182,11 @@ class MasterNode(Node):
 
         ''' ================================================ Master FSM ================================================ '''
         self.state = "idle"
+        
+        # used for navigation to jump back to the correct state afterwards, 
+        # if None then nothing to jump to
+        self.prevState = None
+        
         fsm_period = 0.1  # seconds
         self.fsmTimer = self.create_timer(fsm_period, self.masterFSM)
 
@@ -210,7 +218,9 @@ class MasterNode(Node):
         self.frontierPoints = []
 
         self.robotControlNodeState = ""
-
+        
+        self.lastPathUpdate = time.time()
+        
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
         self.doorStatus = msg.data
@@ -327,35 +337,55 @@ class MasterNode(Node):
         # find frontier points
         self.frontierSearch()
 
-        # recalculate path
-        if len(self.dest_x) > 0:
-            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
-            if len(new_dest_x) == 0:
-                self.get_logger().warn('[occ_callback]: no path found')
-                self.state = 'idle'
-                return
-            # remove the current position which lies at the front of array
-            if len(new_dest_x) > 1:
-                new_dest_x = new_dest_x[1:]
-                new_dest_y = new_dest_y[1:]
-            if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
-                self.get_logger().info('[occ_callback]: path updated')
-                # if the first target point changes, stop once and move again
-                if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
-                    # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+        # recalculate path only after a PATH_UPDATE_PERIOD
+        if (time.time() - self.lastPathUpdate) > PATH_UPDATE_PERIOD:
+            self.lastPathUpdate = time.time() 
+            
+            if len(self.dest_x) > 0:
+                # check the path for the last point which is the destination set last time
+                new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
+                
+                if len(new_dest_x) == 0:
+                    if self.prevState == None:
+                        self.get_logger().info('[occ_callback]: no path found and no prevState; get back to idle')
+                        self.state = 'idle'
+                    else:
+                        # this part handles when frontier turns out to be a wall
+                        
+                        # clear the queued path
+                        self.dest_x = []
+                        self.dest_y = []
+                        
+                        # go back to link
+                        self.get_logger().info('[occ_callback]: no path found get back to prevState: %s' % self.prevState)
+                        self.state = self.prevState
+                        self.prevState = None
+                    return
+                
+                # remove the current position which lies at the front of array
+                if len(new_dest_x) > 1:
+                    new_dest_x = new_dest_x[1:]
+                    new_dest_y = new_dest_y[1:]
+                    
+                # compare the new path with the old path
+                if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
+                    self.get_logger().info('[occ_callback]: path updated')
+                    # if the first target point changes, stop once and move again
+                    if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
+                        # set linear to be zero
+                        linear_msg = Int8()
+                        linear_msg.data = 0
+                        self.linear_publisher.publish(linear_msg)
 
-                    # set delta angle = 0 to stop
-                    deltaAngle_msg = Float64()
-                    deltaAngle_msg.data = 0.0
-                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+                        # set delta angle = 0 to stop
+                        deltaAngle_msg = Float64()
+                        deltaAngle_msg.data = 0.0
+                        self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-                    self.move_straight_to(new_dest_x[0], new_dest_y[0])
-                # update target points
-                self.dest_x = new_dest_x
-                self.dest_y = new_dest_y
+                        self.move_straight_to(new_dest_x[0], new_dest_y[0])
+                    # update target points
+                    self.dest_x = new_dest_x
+                    self.dest_y = new_dest_y
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
@@ -417,6 +447,8 @@ class MasterNode(Node):
             
         elif self.state == "maze_rotating":
             # self.get_logger().info('current yaw: %f' % self.yaw)
+            self.get_logger().info('[maze_rotating]: rotating')
+            
             if self.robotControlNodeState == "rotateStop":
                 # set linear to start moving forward
                 linear_msg = Int8()
@@ -427,9 +459,10 @@ class MasterNode(Node):
                 
                 # reset recalc_stat
                 self.recalc_stat = 0
-                
         elif self.state == "maze_moving":
             # if reached the destination (within one pixel), stop and move to the next destination
+            self.get_logger().info('[maze_moving]: moving')
+            
             if abs(self.botx_pixel - self.dest_x[0]) <= 1 and abs(self.boty_pixel - self.dest_y[0]) <= 1:
                 # set linear to be zero
                 linear_msg = Int8()
@@ -447,7 +480,13 @@ class MasterNode(Node):
                 self.dest_y = self.dest_y[1:]
                 
                 if len(self.dest_x) == 0:
-                    self.state = "idle"
+                    if self.prevState == None:
+                        self.get_logger().info('[maze_moving]: no more destination and link to prevState; get back to idle')
+                        self.state = 'idle'
+                    else:
+                        self.get_logger().info('[maze_moving]: no more destination; get back to prevState: %s' % self.prevState)
+                        self.state = self.prevState
+                        self.prevState = None
                 else:
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
@@ -457,11 +496,13 @@ class MasterNode(Node):
             # recalculate target angle if reach recalc_freq
             # this takes care both for obstacles and re aiming to target coords
             if self.recalc_stat == self.recalc_freq:
-                self.recalc_stat = 0
+                self.get_logger().info('[maze_moving]: recalc')
                 
+                self.recalc_stat = 0
+
                 # # if obstacle in front and close to both sides, rotate to move beteween the two
                 # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-                    
+
                 #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
                 #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
                 #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
@@ -473,35 +514,35 @@ class MasterNode(Node):
                 #     # target angle will be in between the two angles
                 #     targetAngle = (minAngleleft + minAngleRight) / 2
                 #     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
-                    
+
                 # # else if obstacle in front and close to left, rotate right
                 # elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
-                    
+
                 #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
                 #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
                 #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
-                    
+
                 #     # target angle is the angle such that obstacle is no longer in the range of left
                 #     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
                 #     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
-                
+
                 # # else if obstacle in front and close to right, rotate left
                 # elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-                    
+
                 #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
                 #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
                 #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
-                    
+
                 #     # target angle is the angle such that obstacle is no longer in the range of left
                 #     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
                 #     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
-    
+
                 # # else recalculate target angle for next way point
                 # else:
                 target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
                 
                 deltaAngle = target_yaw - self.yaw
-                    
+
                 # set linear to be zero
                 linear_msg = Int8()
                 linear_msg.data = 0
@@ -514,39 +555,29 @@ class MasterNode(Node):
                 
                 self.state = "maze_rotating"
 
-            # else:
-            #     # Calculate the average distance to obstacles on the left, right, and front
-            #     left_avg = np.mean(self.laser_range[self.leftIndexL:self.leftIndexH])
-            #     right_avg = np.mean(self.laser_range[self.rightIndexL:self.rightIndexH])
+        elif self.state == "frontier_search":
+            if len(self.frontierPoints) == 0:
+                self.get_logger().warn('[frontier_search]: no frontier points!!!; get back to idle')
+                self.state = "idle"
+                return
 
-            #     anglularVel_msg = Int8()
-                
-            #     # if both side are too close, move away from the close one
-            #     if left_avg < NAV_TOO_CLOSE and right_avg < NAV_TOO_CLOSE:
-            #         if left_avg < right_avg:
-            #             anglularVel_msg.data = MAZE_ROTATE_SPEED
-            #             self.get_logger().info('[maze_moving]: obstacle on left, turning right')
-            #         else:
-            #             anglularVel_msg.data = -MAZE_ROTATE_SPEED
-            #             self.get_logger().info('[maze_moving]: obstacle on right, turning left')
-                        
-            #     # If there's an obstacle too close on the left, turn right
-            #     elif left_avg < NAV_TOO_CLOSE:
-            #         anglularVel_msg.data = -MAZE_ROTATE_SPEED
-            #         self.get_logger().info('[maze_moving]: obstacle on left, turning right')
-                    
-            #     # If there's an obstacle too close on the right, turn left
-            #     elif right_avg < NAV_TOO_CLOSE:
-            #         anglularVel_msg.data = MAZE_ROTATE_SPEED
-            #         self.get_logger().info('[maze_moving]: obstacle on right, turning left')
-                    
-            #     # Otherwise, go straight
-            #     else:
-            #         anglularVel_msg.data = 0
-            #         self.get_logger().info('[maze_moving]: moving forward')
+            # compare two frontier points and judge which we go first
+            # return True if p1 has higher priority than p2
+            def cmp(p1, p2):
+                return p1[0] < p2[0]
 
-            #     self.anglularVel_publisher.publish(anglularVel_msg)
+            destination = self.frontierPoints[0]
+            for i in range(1, len(self.frontierPoints)):
+                if cmp(self.frontierPoints[i], destination):
+                    destination = self.frontierPoints[i]
+
+            self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
             
+            # set ancor point to link back later
+            self.prevState = "frontier_search"
+            
+            self.move_to(destination[0], destination[1])
+
         elif self.state == "http_request":
             if self.doorStatus == "idle":
                 # send openDoor request
@@ -762,6 +793,7 @@ class MasterNode(Node):
 
                 # if the bucket is hit, the state transition and stopping will be done by the switch_listener_callback
             pass
+        
         elif self.state == "releasing":      
             servoAngle_msg = UInt8()
             servoAngle_msg.data = 180
@@ -771,124 +803,6 @@ class MasterNode(Node):
             # 5 second after releasing, go back to idle
             if (time.time() - self.lastState) > 5:
                 self.state = "idle"
-            
-        elif self.state == "maze_rotating":
-            # self.get_logger().info('current yaw: %f' % self.yaw)
-            if self.robotControlNodeState == "rotateStop":
-                # set linear to start moving forward
-                linear_msg = Int8()
-                linear_msg.data = self.linear_speed
-                self.linear_publisher.publish(linear_msg)
-                
-                self.state = "maze_moving"
-                
-                # reset recalc_stat
-                self.recalc_stat = 0
-        elif self.state == "maze_moving":
-            # if reached the destination (within one pixel), stop and move to the next destination
-            if abs(self.botx_pixel - self.dest_x[0]) <= 1 and abs(self.boty_pixel - self.dest_y[0]) <= 1:
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
-                
-                # set delta angle = 0 to stop
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
-                
-                self.get_logger().info('[maze_moving]: finished moving')
-                
-                self.dest_x = self.dest_x[1:]
-                self.dest_y = self.dest_y[1:]
-                
-                if len(self.dest_x) == 0:
-                    self.get_logger().info('[maze_moving]: no more destination; get back to idle')
-                    self.state = "idle"
-                else:
-                    self.move_straight_to(self.dest_x[0], self.dest_y[0])
-                return
-            
-            self.recalc_stat += 1
-            
-            # recalculate target angle if reach recalc_freq
-            # this takes care both for obstacles and re aiming to target coords
-            if self.recalc_stat == self.recalc_freq:
-                self.recalc_stat = 0
-
-                # # if obstacle in front and close to both sides, rotate to move beteween the two
-                # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-
-                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
-                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
-
-                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
-                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
-
-                #     # target angle will be in between the two angles
-                #     targetAngle = (minAngleleft + minAngleRight) / 2
-                #     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
-
-                # # else if obstacle in front and close to left, rotate right
-                # elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
-
-                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
-                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
-
-                #     # target angle is the angle such that obstacle is no longer in the range of left
-                #     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
-                #     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
-
-                # # else if obstacle in front and close to right, rotate left
-                # elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-
-                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
-                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
-
-                #     # target angle is the angle such that obstacle is no longer in the range of left
-                #     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
-                #     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
-
-                # # else recalculate target angle for next way point
-                # else:
-                target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
-                
-                deltaAngle = target_yaw - self.yaw
-
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
-                
-                # set delta angle to rotate to target angle
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = deltaAngle * 1.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
-                
-                self.state = "maze_rotating"
-
-        elif self.state == "frontier_search":
-            if len(self.frontierPoints) == 0:
-                self.get_logger().warn('[frontier_search]: no frontier points!!!; get back to idle')
-                self.state = "idle"
-                return
-
-            # compare two frontier points and judge which we go first
-            # return True if p1 has higher priority than p2
-            def cmp(p1, p2):
-                return p1[0] < p2[0]
-
-            destination = self.frontierPoints[0]
-            for i in range(1, len(self.frontierPoints)):
-                if cmp(self.frontierPoints[i], destination):
-                    destination = self.frontierPoints[i]
-
-            self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
-            self.move_to(destination[0], destination[1])
 
         else:
             mode, tx, ty = map(int, self.state.split())
@@ -903,90 +817,106 @@ class MasterNode(Node):
                 
                 
         ''' ================================================ DEBUG PLOT ================================================ '''
-        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
-            # Pixel values
-            ROBOT = 0
-            UNMAPPED = 1
-            OPEN = 2
-            OBSTACLE = 3
-            MAGIC_ORIGIN = 4
-            ESTIMATE_DOOR = 5
-            FINISH_LINE = 6
-            FRONTIER = 7
-            FRONTIER_POINT = 8
-            PATH_PLANNING_POINT = 9
-
-            # shows the diluted occupancy map with frontiers and path planning points
-            self.totalMap = self.dilutedOccupancyMap.copy()
-            
-            # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
-            TARGET_SIZE_M = 5
-            TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
-
-            # Calculate the necessary padding
-            padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
-            padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
-
-            # Define the number of pixels to add to the height and width
-            padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
-            padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
-
-            # Pad the image
-            self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
-
-            # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
-            self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
-            self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
-
-            self.totalMap[self.finishLine_Ypixel, :] = FINISH_LINE
-
-            # Set the value of the frontier and the frontier points
-            for pixel in self.frontier:
-                self.totalMap[pixel[0], pixel[1]] = FRONTIER
-
-            for pixel in self.frontierPoints:
-                self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
-
-            # Set the value for the path planning points
-            for i in range(len(self.dest_x)):
-                self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
-
-            colourList = ['black',
-                          (85/255, 85/255, 85/255),         # dark grey
-                          (170/255, 170/255, 170/255),      # light grey
-                          'white',
-                          (50/255, 205/255, 50/255),        # lime green
-                          (1, 1, 0),                        # yellow
-                          (0, 1, 0)                         # green
-                          ]
-
-            # add in colours for each type of pixel
-            if len(self.frontier) > 0:
-                colourList.append((0, 1, 1))    # cyan
-
-            if len(self.frontierPoints) > 0:
-                colourList.append((1, 0, 1))    # magenta
-
-            if len(self.dest_x) > 0:
-                colourList.append((1, 165/255, 0))   # orange
+        try:
+            if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
+                PLOT_ORI = False
+                # PLOT_ORI = True
                 
-            # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
-            self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
+                if PLOT_ORI == False:
+                    # Pixel values
+                    ROBOT = 0
+                    UNMAPPED = 1
+                    OPEN = 2
+                    OBSTACLE = 3
+                    MAGIC_ORIGIN = 4
+                    ESTIMATE_DOOR = 5
+                    FINISH_LINE = 6
+                    FRONTIER = 7
+                    FRONTIER_POINT = 8
+                    PATH_PLANNING_POINT = 9
 
-            # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
-            self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
-
-            # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin
-
-            cmap = ListedColormap(colourList)
-
-            plt.imshow(self.totalMap, origin='lower', cmap=cmap)
+                    # shows the diluted occupancy map with frontiers and path planning points
+                    self.totalMap = self.dilutedOccupancyMap.copy()
                     
-            plt.draw_all()
-            # pause to make sure the plot gets created
-            plt.pause(0.00000000001)
-            
-            self.lastPlot = time.time()
+                    # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
+                    TARGET_SIZE_M = 5
+                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
+
+                    # Calculate the necessary padding
+                    padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
+                    padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+
+                    # Define the number of pixels to add to the height and width
+                    padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+                    padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+
+                    # Pad the image
+                    self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
+
+                    try:
+                        # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
+                        self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
+                        self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
+
+                        self.totalMap[self.finishLine_Ypixel, :] = FINISH_LINE
+                    except:
+                        self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
+
+                    # Set the value of the frontier and the frontier points
+                    for pixel in self.frontier:
+                        self.totalMap[pixel[0], pixel[1]] = FRONTIER
+
+                    for pixel in self.frontierPoints:
+                        self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
+
+                    # Set the value for the path planning points
+                    for i in range(len(self.dest_x)):
+                        self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
+
+                    colourList = ['black',
+                                (85/255, 85/255, 85/255),         # dark grey
+                                (170/255, 170/255, 170/255),      # light grey
+                                'white',
+                                (50/255, 205/255, 50/255),        # lime green
+                                (1, 1, 0),                        # yellow
+                                (0, 1, 0)                         # green
+                                ]
+
+                    # add in colours for each type of pixel
+                    if len(self.frontier) > 0:
+                        colourList.append((0, 1, 1))    # cyan
+
+                    if len(self.frontierPoints) > 0:
+                        colourList.append((1, 0, 1))    # magenta
+
+                    if len(self.dest_x) > 0:
+                        colourList.append((1, 165/255, 0))   # orange
+                        
+                    # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+                    self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
+
+                    # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
+                    self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
+
+                    # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin
+
+                    cmap = ListedColormap(colourList)
+
+                    plt.imshow(self.totalMap, origin='lower', cmap=cmap)
+                    
+                    plt.draw_all()
+                    # pause to make sure the plot gets created
+                    plt.pause(0.00000000001)
+                else:
+                    plt.imshow(self.occupancyMap, origin='lower')
+                            
+                    plt.draw_all()
+                    # pause to make sure the plot gets created
+                    plt.pause(0.00000000001)
+                
+                self.lastPlot = time.time()
+        except:
+            self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
@@ -1000,6 +930,11 @@ class MasterNode(Node):
     def find_path_to(self, tx, ty):
         # unmapped/obstacle is 0, open space 1
         ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
+        
+        # first check that the point is not a wall
+        if ok[ty][tx] == 0:
+            self.get_logger().info('[path_finding]: cell (%d %d) is a wall' % (tx, ty))
+            return [], []
 
         # Dijkstra's algorithm
         # get grid coordination
@@ -1055,8 +990,14 @@ class MasterNode(Node):
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
 
         if len(self.dest_x) == 0:
-            self.get_logger().warn('[move_to]: no path found')
-            self.state = "idle"
+            if self.prevState == None:
+                self.get_logger().info('[move_to]: no path found and no prevState; get back to idle')
+                self.state = 'idle'
+            else:
+                # this part handles when frontier turns out to be a wall
+                self.get_logger().info('[move_to]: no path found get back to prevState: %s' % self.prevState)
+                self.state = self.prevState
+                self.prevState = None
         else:
             self.get_logger().info('[move_to]: path finding finished')
             self.state = "maze_moving"
