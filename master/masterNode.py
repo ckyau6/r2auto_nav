@@ -518,14 +518,14 @@ class MasterNode(Node):
             #     self.anglularVel_publisher.publish(anglularVel_msg)
             
         elif self.state == "http_request":
-            while(self.doorStatus == "idle"):
+            if self.doorStatus == "idle":
                 # send openDoor request
                 door_msg = String()
                 door_msg.data = "openDoor"
                 self.http_publisher.publish(door_msg)
                 self.get_logger().info('[http_request]: opening door')
                 
-            if self.doorStatus == "door1":
+            elif self.doorStatus == "door1":
                 self.get_logger().info('[http_request]: door1 opened')
                 self.state = "go_to_left_door"
             
