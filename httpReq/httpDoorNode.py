@@ -24,13 +24,13 @@ class DoorHandler(Node):
         # Create a publisher to the topic "doorStatus"
         # Publishes the status of the door to the main control node
         self.publisher_ = self.create_publisher(String, 'doorStatus', 10)
-        publisher_period = 0.5  # seconds
+        publisher_period = 2  # seconds
         self.publisherTimer = self.create_timer(publisher_period, self.publisher_callback)
         self.statsToPublish = "idle"
         
         # for FSM
         self.state = "idle"
-        fsm_period = 0.1  # seconds
+        fsm_period = 0.5  # seconds
         self.fsmTimer = self.create_timer(fsm_period, self.httpFSM)
         
         self.get_logger().info("httpdoornode has started! :D")
@@ -44,7 +44,7 @@ class DoorHandler(Node):
     def publisher_callback(self):
         msg = String()
         
-        # if ESP is online publish intended door status, else publish connection error
+        # if ESP is onlineD publish intended door status, else publish connection error
         if self.httpESP.pingESP():
             msg.data = self.statsToPublish
         else:

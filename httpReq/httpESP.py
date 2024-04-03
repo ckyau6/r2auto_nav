@@ -26,4 +26,10 @@ class HttpESP:
         # -s sets the size of the package, 1 smallest
         # -w sets the time out, 1 second
         # https://www.geeksforgeeks.org/ping-command-in-linux-with-examples/
-        return os.system("ping -c 1 -s 1 -w 1 " + self.ip_address) == 0
+        # return os.system("ping -c 1 -s 1 -w 1 " + self.ip_address) == 0
+        
+        # the whole workspace when ran fucks the ping
+        return os.system("ping -c 1 -s 1 " + self.ip_address) == 0
+        
+    
+
