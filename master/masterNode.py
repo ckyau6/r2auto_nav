@@ -21,13 +21,14 @@ import time
 
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
-occ_bins = [-1, 0, 60, 100]
+occ_bins = [-1, 0, 65, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 10
+CLEARANCE_RADIUS = 12
 
-FRONTIER_THRESHOLD = 3
+# this is in pixel
+FRONTIER_THRESHOLD = 4
 
 NAV_TOO_CLOSE = 0.30
 
@@ -60,7 +61,7 @@ RIGHT_DOOR_COORDS_M = (1.90, 2.70)
 FINISH_LINE_M = 2.10
 
 # to avoid oscillation, in second, no point 1s since occ map is 1s
-PATH_UPDATE_PERIOD = 5
+PATH_UPDATE_PERIOD = 7
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -502,46 +503,54 @@ class MasterNode(Node):
 
                 # # if obstacle in front and close to both sides, rotate to move beteween the two
                 # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-
+                                  
                 #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
+                #     minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
                 #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
 
                 #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
+                #     minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + MAZE_FRONT_RIGHT_ANGLE
                 #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
 
                 #     # target angle will be in between the two angles
                 #     targetAngle = (minAngleleft + minAngleRight) / 2
                 #     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
+                    
+                #     self.get_logger().info('[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (minAngleleft, minAngleRight, deltaAngle))
 
                 # # else if obstacle in front and close to left, rotate right
                 # elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
 
                 #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                #     minIndexLeft = np.nanargmin(self.laser_range[:MAZE_FRONT_LEFT_ANGLE])
+                #     minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
                 #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
 
                 #     # target angle is the angle such that obstacle is no longer in the range of left
                 #     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
                 #     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
+                    
+                #     self.get_logger().info('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (minAngleleft, deltaAngle))
 
                 # # else if obstacle in front and close to right, rotate left
                 # elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
 
                 #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                #     minIndexRight = np.nanargmin(self.laser_range[MAZE_FRONT_RIGHT_ANGLE:]) + MAZE_FRONT_RIGHT_ANGLE
+                #     minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + self.mazeFrontRightindex
                 #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
 
                 #     # target angle is the angle such that obstacle is no longer in the range of left
                 #     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
                 #     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
 
+                #     self.get_logger().info('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (minAngleRight, deltaAngle))
+                    
                 # # else recalculate target angle for next way point
                 # else:
                 target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
                 
                 deltaAngle = target_yaw - self.yaw
+                
+                self.get_logger().info('[maze_moving]: front open, reallign with deltaAngle: %f' % deltaAngle)
 
                 # set linear to be zero
                 linear_msg = Int8()
@@ -561,16 +570,27 @@ class MasterNode(Node):
                 self.state = "idle"
                 return
 
-            # compare two frontier points and judge which we go first
-            # return True if p1 has higher priority than p2
-            def cmp(p1, p2):
-                return p1[0] < p2[0]
+            # # compare two frontier points and judge which we go first
+            # # return True if p1 has higher priority than p2
+            # def cmp(p1, p2):
+            #     return p1[0] < p2[0]
 
-            destination = self.frontierPoints[0]
-            for i in range(1, len(self.frontierPoints)):
-                if cmp(self.frontierPoints[i], destination):
-                    destination = self.frontierPoints[i]
+            # destination = self.frontierPoints[0]
+            # for i in range(1, len(self.frontierPoints)):
+            #     if cmp(self.frontierPoints[i], destination):
+            #         destination = self.frontierPoints[i]
+            
+            # find the closest frontier
+            # Current position
+            curr_pos = np.array([self.botx_pixel, self.boty_pixel]) 
 
+            # Calculate the Euclidean distance from the current position to each point
+            def distance_to_curr_pos(point):
+                return np.linalg.norm(curr_pos - np.array(point))
+
+            # Find the point in self.frontierPoints that is closest to the current position
+            destination = min(self.frontierPoints, key=distance_to_curr_pos)
+            
             self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
             
             # set ancor point to link back later
@@ -1123,7 +1143,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        master_node.destroy_node()
+        master_node.custom_destroy_node()
 
 if __name__ == '__main__':
     main()
