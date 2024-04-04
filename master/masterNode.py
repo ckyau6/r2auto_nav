@@ -65,6 +65,10 @@ FINISH_LINE_M = 2.10
 # to avoid oscillation, in second, no point 1s since occ map is 1s
 PATH_UPDATE_PERIOD = 7
 
+UNMAPPED = 1
+OPEN = 2
+OBSTACLE = 3
+
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
     t3 = +2.0 * (w * z + x * y)
@@ -224,6 +228,9 @@ class MasterNode(Node):
         
         self.lastPathUpdate = time.time()
         
+        self.botx_pixel = 0
+        self.boty_pixel = 0       
+        
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
         self.doorStatus = msg.data
@@ -287,6 +294,8 @@ class MasterNode(Node):
         self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
+        self.get_logger().info('[occ_callback]: new occ map!')
+        
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
         self.map_w = msg.info.width
         self.map_h = msg.info.height
@@ -305,9 +314,6 @@ class MasterNode(Node):
         # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
         # pixelExpend = numbers of pixel to expend by
         pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))  
-        
-        OPEN = 2
-        OBSTACLE = 3
 
         # Create a mask of the OPEN areas
         open_mask = (self.occupancyMap == OPEN)
@@ -342,7 +348,7 @@ class MasterNode(Node):
 
         # recalculate path only after a PATH_UPDATE_PERIOD
         # if (time.time() - self.lastPathUpdate) > PATH_UPDATE_PERIOD:
-        self.lastPathUpdate = time.time() 
+        # self.lastPathUpdate = time.time() 
         
         if len(self.dest_x) > 0:
             # check the path for the last point which is the destination set last time
@@ -393,6 +399,8 @@ class MasterNode(Node):
     def fsmDebug_callback(self, msg):
         if msg.data == "frontier_search":
             self.state = self.magicState = "frontier_search"
+        elif msg.data == "idle":
+            self.state = self.magicState = "idle"
         else:
             mode, tx, ty = map(int, self.state.split())
             if mode == 0:
@@ -426,6 +434,13 @@ class MasterNode(Node):
         self.destroy_node()
     
     def masterFSM(self):
+        # check if the robot is stuck in map and in frontier search
+        # unmapped/obstacle is 0, open space 1
+        wall = np.where(self.dilutedOccupancyMap == OBSTACLE, 1, 0)
+        if self.state == "frontier_search" and wall[self.boty_pixel][self.botx_pixel]:
+            self.get_logger().info('[masterFSM]: ahhh stuck in wall')
+            self.state = "escape_wall_lmao"
+        
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
             servoAngle_msg = UInt8()
@@ -560,11 +575,28 @@ class MasterNode(Node):
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
                 self.state = "maze_rotating"
+                
+        elif self.state == "escape_wall_lmao":
+            # dequeue all bullshit in dest
+            self.dest_x = []
+            self.dest_y = []
+            
+            # Find the nearest free pixel
+            free_pixels = np.where(self.dilutedOccupancyMap == OPEN)
+            distances = np.sqrt((free_pixels[0] - self.boty_pixel) ** 2 + (free_pixels[1] - self.botx_pixel) ** 2)
+            minIndex = np.argmin(distances)
+            
+            # cannot use move_to since its stuck in a wall
+            # use move_straight_to instead
+            self.dest_x = [free_pixels[1][minIndex]]
+            self.dest_y = [free_pixels[0][minIndex]]
+            self.get_logger().info('[escape_wall_lmao]: moving to nearest free pixel: (%d, %d)' % (self.dest_x[0], self.dest_y[0]))
+            self.move_straight_to(self.dest_x[0], self.dest_y[0])
 
         elif self.state == "frontier_search":
             if len(self.frontierPoints) == 0:
-                self.get_logger().warn('[frontier_search]: no frontier points!!!; get back to idle')
-                self.state = self.magicState = "http_request"
+                self.get_logger().warn('[frontier_search]: no frontier points!!!; go to move_to_hallway')
+                self.state = self.magicState = "move_to_hallway"
                 return
 
             # # compare two frontier points and judge which we go first
@@ -583,6 +615,18 @@ class MasterNode(Node):
             self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
             
             self.move_to(destination[0], destination[1])
+            
+        elif self.state == "move_to_hallway":
+            # TEMPORARY change to move to coords and jump to http_request
+            # set linear to be zero
+            linear_msg = Int8()
+            linear_msg.data = 0
+            self.linear_publisher.publish(linear_msg)
+            
+            # set delta angle = 0 to stop
+            deltaAngle_msg = Float64()
+            deltaAngle_msg.data = 0.0
+            self.deltaAngle_publisher.publish(deltaAngle_msg)
 
         elif self.state == "http_request":
             if self.doorStatus == "idle":
@@ -823,9 +867,9 @@ class MasterNode(Node):
                 if PLOT_ORI == False:
                     # Pixel values
                     ROBOT = 0
-                    UNMAPPED = 1
-                    OPEN = 2
-                    OBSTACLE = 3
+                    # UNMAPPED = 1
+                    # OPEN = 2
+                    # OBSTACLE = 3
                     MAGIC_ORIGIN = 4
                     ESTIMATE_DOOR = 5
                     FINISH_LINE = 6
@@ -1103,6 +1147,7 @@ class MasterNode(Node):
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
                 
                 # skip if it is not reachable
+                self.get_logger().info('[frontierSearch]: checking if frontier is recheable')
                 if len(self.find_path_to(middle_x, middle_y)[0]) == 0:
                     continue
 
@@ -1120,6 +1165,7 @@ class MasterNode(Node):
                 return -1 if d_to_a < d_to_b else 1
                 
             self.frontierPoints.sort(key=cmp_to_key(cmp_points))
+            self.get_logger().info('[frontierSearch]: frontier points: %s' % str(self.frontierPoints))
 
 def main(args=None):
     rclpy.init(args=args)
