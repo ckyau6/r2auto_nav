@@ -99,6 +99,7 @@ class RobotControlNode(Node):
     def odom_callback(self, msg):
         orientation_quat = msg.pose.pose.orientation
         self.yaw = angle_from_quaternion(orientation_quat.x, orientation_quat.y, orientation_quat.z, orientation_quat.w)
+        self.get_logger().info("[odom_callback]: %f" % math.degrees(self.yaw))
 
     def linear_callback(self, msg):
         # -1 to -127    ==> 0% to -100% of the maximum speed

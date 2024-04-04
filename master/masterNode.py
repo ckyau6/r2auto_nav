@@ -16,6 +16,7 @@ import heapq
 import argparse
 from collections import deque
 from skimage.morphology import dilation, disk
+from functools import cmp_to_key
 
 import time
 
@@ -29,6 +30,7 @@ CLEARANCE_RADIUS = 12
 
 # this is in pixel
 FRONTIER_THRESHOLD = 4
+PIXEL_DEST_THRES = 0
 
 NAV_TOO_CLOSE = 0.30
 
@@ -339,54 +341,54 @@ class MasterNode(Node):
         self.frontierSearch()
 
         # recalculate path only after a PATH_UPDATE_PERIOD
-        if (time.time() - self.lastPathUpdate) > PATH_UPDATE_PERIOD:
-            self.lastPathUpdate = time.time() 
+        # if (time.time() - self.lastPathUpdate) > PATH_UPDATE_PERIOD:
+        self.lastPathUpdate = time.time() 
+        
+        if len(self.dest_x) > 0:
+            # check the path for the last point which is the destination set last time
+            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
             
-            if len(self.dest_x) > 0:
-                # check the path for the last point which is the destination set last time
-                new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
-                
-                if len(new_dest_x) == 0:
-                    if self.prevState == None:
-                        self.get_logger().info('[occ_callback]: no path found and no prevState; get back to idle')
-                        self.state = 'idle'
-                    else:
-                        # this part handles when frontier turns out to be a wall
-                        
-                        # clear the queued path
-                        self.dest_x = []
-                        self.dest_y = []
-                        
-                        # go back to link
-                        self.get_logger().info('[occ_callback]: no path found get back to prevState: %s' % self.prevState)
-                        self.state = self.prevState
-                        self.prevState = None
-                    return
-                
-                # remove the current position which lies at the front of array
-                if len(new_dest_x) > 1:
-                    new_dest_x = new_dest_x[1:]
-                    new_dest_y = new_dest_y[1:]
+            if len(new_dest_x) == 0:
+                if self.prevState == None:
+                    self.get_logger().info('[occ_callback]: no path found and no prevState; get back to idle')
+                    self.state = 'idle'
+                else:
+                    # this part handles when frontier turns out to be a wall
                     
-                # compare the new path with the old path
-                if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
-                    self.get_logger().info('[occ_callback]: path updated')
-                    # if the first target point changes, stop once and move again
-                    if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
-                        # set linear to be zero
-                        linear_msg = Int8()
-                        linear_msg.data = 0
-                        self.linear_publisher.publish(linear_msg)
+                    # clear the queued path
+                    self.dest_x = []
+                    self.dest_y = []
+                    
+                    # go back to link
+                    self.get_logger().info('[occ_callback]: no path found get back to prevState: %s' % self.prevState)
+                    self.state = self.prevState
+                    self.prevState = None
+                return
+            
+            # remove the current position which lies at the front of array
+            if len(new_dest_x) > 1:
+                new_dest_x = new_dest_x[1:]
+                new_dest_y = new_dest_y[1:]
+                
+            # compare the new path with the old path
+            if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
+                self.get_logger().info('[occ_callback]: path updated')
+                # if the first target point changes, stop once and move again
+                if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
+                    # set linear to be zero
+                    linear_msg = Int8()
+                    linear_msg.data = 0
+                    self.linear_publisher.publish(linear_msg)
 
-                        # set delta angle = 0 to stop
-                        deltaAngle_msg = Float64()
-                        deltaAngle_msg.data = 0.0
-                        self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    # set delta angle = 0 to stop
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = 0.0
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-                        self.move_straight_to(new_dest_x[0], new_dest_y[0])
-                    # update target points
-                    self.dest_x = new_dest_x
-                    self.dest_y = new_dest_y
+                    self.move_straight_to(new_dest_x[0], new_dest_y[0])
+                # update target points
+                self.dest_x = new_dest_x
+                self.dest_y = new_dest_y
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
@@ -464,7 +466,7 @@ class MasterNode(Node):
             # if reached the destination (within one pixel), stop and move to the next destination
             self.get_logger().info('[maze_moving]: moving')
             
-            if abs(self.botx_pixel - self.dest_x[0]) <= 1 and abs(self.boty_pixel - self.dest_y[0]) <= 1:
+            if abs(self.botx_pixel - self.dest_x[0]) <= PIXEL_DEST_THRES and abs(self.boty_pixel - self.dest_y[0]) <= PIXEL_DEST_THRES:
                 # set linear to be zero
                 linear_msg = Int8()
                 linear_msg.data = 0
@@ -550,6 +552,7 @@ class MasterNode(Node):
                 
                 deltaAngle = target_yaw - self.yaw
                 
+                
                 self.get_logger().info('[maze_moving]: front open, reallign with deltaAngle: %f' % deltaAngle)
 
                 # set linear to be zero
@@ -579,17 +582,9 @@ class MasterNode(Node):
             # for i in range(1, len(self.frontierPoints)):
             #     if cmp(self.frontierPoints[i], destination):
             #         destination = self.frontierPoints[i]
-            
-            # find the closest frontier
-            # Current position
-            curr_pos = np.array([self.botx_pixel, self.boty_pixel]) 
-
-            # Calculate the Euclidean distance from the current position to each point
-            def distance_to_curr_pos(point):
-                return np.linalg.norm(curr_pos - np.array(point))
 
             # Find the point in self.frontierPoints that is closest to the current position
-            destination = min(self.frontierPoints, key=distance_to_curr_pos)
+            destination = self.frontierPoints[0]
             
             self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
             
@@ -940,7 +935,7 @@ class MasterNode(Node):
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
-        self.get_logger().info('[move_straight_to]: currently at (%d %d), moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
+        self.get_logger().info('[move_straight_to]: currently at (%d %d) with yaw %f, moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, self.yaw, tx, ty))
         # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
         deltaAngle = Float64()
         deltaAngle.data = target_yaw - self.yaw
@@ -1003,6 +998,14 @@ class MasterNode(Node):
                 ty, tx = pre[ty][tx]
             res_x.reverse()
             res_y.reverse()
+            if len(res_x) >= 3:
+                d_01 = abs(res_x[1] - res_x[0]) + abs(res_y[1] - res_y[0])
+                d_12 = abs(res_x[2] - res_x[1]) + abs(res_y[2] - res_y[1])
+                if d_01 == 1 and d_12 >= 10:
+                    res_x.pop(1)
+                    res_y.pop(1)
+            self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
+            
             return res_x, res_y
         
     def move_to(self, tx, ty):
@@ -1021,6 +1024,7 @@ class MasterNode(Node):
         else:
             self.get_logger().info('[move_to]: path finding finished')
             self.state = "maze_moving"
+            
         
     def frontierSearch(self):      
         if len(self.dilutedOccupancyMap) == 0:
@@ -1121,8 +1125,25 @@ class MasterNode(Node):
                 # Calculate the middle x and y coordinates
                 middle_x = sorted(x_coords)[len(x_coords) // 2]
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
+                
+                # skip if it is not reachable
+                if len(self.find_path_to(middle_x, middle_y)[0]) == 0:
+                    continue
 
                 self.frontierPoints.append((middle_x, middle_y))
+                
+            # sort points by distance from current position
+            # Current position
+            curr_pos = np.array([self.botx_pixel, self.boty_pixel]) 
+
+            def cmp_points(a, b):
+                d_to_a = np.linalg.norm(curr_pos - np.array(a))
+                d_to_b = np.linalg.norm(curr_pos - np.array(b))
+                if d_to_a == d_to_b: 
+                    return 0
+                return -1 if d_to_a < d_to_b else 1
+                
+            self.frontierPoints.sort(key=cmp_to_key(cmp_points))
 
 def main(args=None):
     rclpy.init(args=args)
