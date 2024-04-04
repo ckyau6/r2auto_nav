@@ -188,7 +188,7 @@ class MasterNode(Node):
         
         # used for navigation to jump back to the correct state afterwards, 
         # if None then nothing to jump to
-        self.prevState = None
+        self.magicState = "idle"
         
         fsm_period = 0.1  # seconds
         self.fsmTimer = self.create_timer(fsm_period, self.masterFSM)
@@ -349,20 +349,8 @@ class MasterNode(Node):
             new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
             
             if len(new_dest_x) == 0:
-                if self.prevState == None:
-                    self.get_logger().info('[occ_callback]: no path found and no prevState; get back to idle')
-                    self.state = 'idle'
-                else:
-                    # this part handles when frontier turns out to be a wall
-                    
-                    # clear the queued path
-                    self.dest_x = []
-                    self.dest_y = []
-                    
-                    # go back to link
-                    self.get_logger().info('[occ_callback]: no path found get back to prevState: %s' % self.prevState)
-                    self.state = self.prevState
-                    self.prevState = None
+                self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
+                self.state = self.magicState
                 return
             
             # remove the current position which lies at the front of array
@@ -403,7 +391,18 @@ class MasterNode(Node):
         self.robotControlNodeState = msg.data
 
     def fsmDebug_callback(self, msg):
-        self.state = msg.data
+        if msg.data == "frontier_search":
+            self.state = self.magicState = "frontier_search"
+        else:
+            mode, tx, ty = map(int, self.state.split())
+            if mode == 0:
+                self.dest_x.append(tx)
+                self.dest_y.append(ty)
+                self.move_straight_to(tx, ty)
+            elif mode == 1:
+                self.move_to(tx, ty)
+            else:
+                self.get_logger().info('mode %d does not exist' % mode)
 
     def index_to_angle(self, index, arrLen):
         # return in degrees
@@ -483,13 +482,8 @@ class MasterNode(Node):
                 self.dest_y = self.dest_y[1:]
                 
                 if len(self.dest_x) == 0:
-                    if self.prevState == None:
-                        self.get_logger().info('[maze_moving]: no more destination and link to prevState; get back to idle')
-                        self.state = 'idle'
-                    else:
-                        self.get_logger().info('[maze_moving]: no more destination; get back to prevState: %s' % self.prevState)
-                        self.state = self.prevState
-                        self.prevState = None
+                    self.get_logger().info('[maze_moving]: no more destination; get back to magicState: %s' % self.magicState)
+                    self.state = self.magicState
                 else:
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
@@ -570,7 +564,7 @@ class MasterNode(Node):
         elif self.state == "frontier_search":
             if len(self.frontierPoints) == 0:
                 self.get_logger().warn('[frontier_search]: no frontier points!!!; get back to idle')
-                self.state = "idle"
+                self.state = self.magicState = "http_request"
                 return
 
             # # compare two frontier points and judge which we go first
@@ -588,9 +582,6 @@ class MasterNode(Node):
             
             self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
             
-            # set ancor point to link back later
-            self.prevState = "frontier_search"
-            
             self.move_to(destination[0], destination[1])
 
         elif self.state == "http_request":
@@ -603,11 +594,11 @@ class MasterNode(Node):
                 
             elif self.doorStatus == "door1":
                 self.get_logger().info('[http_request]: door1 opened')
-                self.state = "go_to_left_door"
+                self.state = self.magicState = "go_to_left_door"
             
             elif self.doorStatus == "door2":
                 self.get_logger().info('[http_request]: door2 opened')
-                self.state = "go_to_right_door"
+                self.state = self.magicState = "go_to_right_door"
                 
             elif self.doorStatus == "connection error":
                 self.get_logger().info('[http_request]: connection error')
@@ -820,16 +811,8 @@ class MasterNode(Node):
                 self.state = "idle"
 
         else:
-            mode, tx, ty = map(int, self.state.split())
-            if mode == 0:
-                self.dest_x.append(tx)
-                self.dest_y.append(ty)
-                self.move_straight_to(tx, ty)
-            elif mode == 1:
-                self.move_to(tx, ty)
-            else:
-                self.get_logger().info('mode %d does not exist' % mode)
-                
+            self.get_logger().error('state %s not defined' % self.state)
+
                 
         ''' ================================================ DEBUG PLOT ================================================ '''
         try:
@@ -1013,16 +996,9 @@ class MasterNode(Node):
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
 
         if len(self.dest_x) == 0:
-            if self.prevState == None:
-                self.get_logger().info('[move_to]: no path found and no prevState; get back to idle')
-                self.state = 'idle'
-            else:
-                # this part handles when frontier turns out to be a wall
-                self.get_logger().info('[move_to]: no path found get back to prevState: %s' % self.prevState)
-                self.state = self.prevState
-                self.prevState = None
+            self.get_logger().info('[move_to]: no path found get back to magicState: %s' % self.magicState)
+            self.state = self.magicState
         else:
-            self.get_logger().info('[move_to]: path finding finished')
             self.state = "maze_moving"
             
         
