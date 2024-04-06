@@ -18,6 +18,8 @@ from collections import deque
 from skimage.morphology import dilation, disk
 from functools import cmp_to_key
 
+from scipy.ndimage import generic_filter
+
 import time
 
 # used to convert the occupancy grid to an image of map, umpapped, occupied
@@ -298,7 +300,6 @@ class MasterNode(Node):
         self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
-        occTime = time.time()
         self.get_logger().info('[occ_callback]: new occ map!')
         
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
@@ -306,10 +307,64 @@ class MasterNode(Node):
         self.map_h = msg.info.height
         self.map_origin_x = msg.info.origin.position.x
         self.map_origin_y = msg.info.origin.position.y
+        
+        # this gives the locations of bot in the occupancy map, in pixel
+        self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
+        self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
+        
+        # this gives the locations of magic origin in the occupancy map, in pixel
+        self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
+        self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
+        self.magicOriginx_pixel += self.offset_x
+        self.magicOriginy_pixel += self.offset_y
+
+        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
+        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
+        
+        # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+        # 
+        # TEMPPP
+        # Convert the OccupancyGrid to a numpy array
+        self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
+
+        # Normalize the values to the range [0, 1]
+        # self.oriorimap /= 100.0
+        
+        # # Print all unique values in self.oriorimap
+        # unique_values = np.unique(self.oriorimap)
+        # self.get_logger().info('Unique values in oriorimap: %s' % unique_values)
+        
+        PARAMETER_R = 0.9
+        # use odd number for window size
+        WINDOWSIZE = 11
+        occTime = time.time()
+        
+        # Define the function to apply over the moving window
+        def func(window):
+            # Calculate the distances from the center of the grid
+            center = WINDOWSIZE // 2
+            distances = np.sqrt((np.arange(WINDOWSIZE) - center)**2 + (np.arange(WINDOWSIZE)[:, None] - center)**2).reshape(WINDOWSIZE**2)
+
+            # Calculate the new pixel value
+            new_pixel = np.max(window * PARAMETER_R**distances)
+
+            return new_pixel
+
+        # Apply the function over a moving window on the image
+        self.processedOcc = generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))
+        
+        self.get_logger().info(str(self.processedOcc == self.oriorimap))
+
+        
+        
+        timeTaken = time.time() - occTime
+        self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
 
         # this converts the occupancy grid to an 1d array of map, umpapped, occupied
         occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count', bins=occ_bins)
-
+    
         # reshape to 2D array 
         # 1 = unmapped
         # 2 = mapped and open
@@ -335,27 +390,11 @@ class MasterNode(Node):
         # Apply the dilation only within the OPEN areas
         self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
         
-        # this gives the locations of bot in the occupancy map, in pixel
-        self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
-        self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
         
         
-        # this gives the locations of magic origin in the occupancy map, in pixel
-        self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
-        self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
-        self.magicOriginx_pixel += self.offset_x
-        self.magicOriginy_pixel += self.offset_y
-
-        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
-        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
-
         # find frontier points
         self.frontierSearch()
         
-        timeTaken = time.time() - occTime
-        self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
         
 
         if len(self.dest_x) > 0:
@@ -391,14 +430,6 @@ class MasterNode(Node):
                 # update target points
                 self.dest_x = new_dest_x
                 self.dest_y = new_dest_y
-                
-        
-        # TEMPPP
-        # Convert the OccupancyGrid to a numpy array
-        self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
-
-        # Normalize the values to the range [0, 1]
-        self.oriorimap /= 100.0
         
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
@@ -987,13 +1018,13 @@ class MasterNode(Node):
             else:
                 # plt.imshow(self.occupancyMap, origin='lower')
                 
-                # # cmap = colors.ListedColormap(['black', 'red', 'gray'])
+                # cmap = ListedColormap(['black', 'red', 'gray'])
+                plt.imshow(self.processedOcc, cmap='gray', origin='lower')
                 # plt.imshow(self.oriorimap, cmap=cmap, origin='lower')
                 
-                # plt.draw_all()
-                # # pause to make sure the plot gets created
-                # plt.pause(0.00000000001)
-                pass
+                plt.draw_all()
+                # pause to make sure the plot gets created
+                plt.pause(0.00000000001)
             
             # self.lastPlot = time.time()
         # except:
