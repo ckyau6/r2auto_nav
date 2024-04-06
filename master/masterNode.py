@@ -69,6 +69,9 @@ UNMAPPED = 1
 OPEN = 2
 OBSTACLE = 3
 
+# this is for path finder to ignore close points, in pixels
+RADIUS_OF_IGNORE = 3
+
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
     t3 = +2.0 * (w * z + x * y)
@@ -590,8 +593,28 @@ class MasterNode(Node):
             # use move_straight_to instead
             self.dest_x = [free_pixels[1][minIndex]]
             self.dest_y = [free_pixels[0][minIndex]]
-            self.get_logger().info('[escape_wall_lmao]: moving to nearest free pixel: (%d, %d)' % (self.dest_x[0], self.dest_y[0]))
-            self.move_straight_to(self.dest_x[0], self.dest_y[0])
+            self.get_logger().info('[escape_wall_lmao]: currently at (%d, %d) moving to nearest free pixel: (%d, %d)' % (self.botx_pixel, self.boty_pixel, self.dest_x[0], self.dest_y[0]))
+            
+            # if free pixel is behind (90, 270), reverse first
+            # else use move_straight_to to move to the free pixel
+            target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
+            deltaAngle = target_yaw - self.yaw
+            
+            if deltaAngle > 90 or deltaAngle < -90:
+                # set linear to be reverse
+                linear_msg = Int8()
+                linear_msg.data = -self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle to 0
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                # set to maze_moving to move until the free pixel
+                self.state = "maze_moving"
+            else:
+                self.move_straight_to(self.dest_x[0], self.dest_y[0])
 
         elif self.state == "frontier_search":
             if len(self.frontierPoints) == 0:
@@ -1027,8 +1050,8 @@ class MasterNode(Node):
             res_y.reverse()
             if len(res_x) >= 3:
                 d_01 = abs(res_x[1] - res_x[0]) + abs(res_y[1] - res_y[0])
-                d_12 = abs(res_x[2] - res_x[1]) + abs(res_y[2] - res_y[1])
-                if d_01 == 1 and d_12 >= 10:
+                # d_12 = abs(res_x[2] - res_x[1]) + abs(res_y[2] - res_y[1])
+                if d_01 <= RADIUS_OF_IGNORE:
                     res_x.pop(1)
                     res_y.pop(1)
             self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
@@ -1165,7 +1188,8 @@ class MasterNode(Node):
                 return -1 if d_to_a < d_to_b else 1
                 
             self.frontierPoints.sort(key=cmp_to_key(cmp_points))
-            self.get_logger().info('[frontierSearch]: frontier points: %s' % str(self.frontierPoints))
+            
+        self.get_logger().info('[frontierSearch]: frontier points: %s' % str(self.frontierPoints))
 
 def main(args=None):
     rclpy.init(args=args)
