@@ -26,11 +26,11 @@ occ_bins = [-1, 0, 65, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 12
+CLEARANCE_RADIUS = 10
 
 # this is in pixel
 FRONTIER_THRESHOLD = 4
-PIXEL_DEST_THRES = 0
+PIXEL_DEST_THRES = 2
 
 NAV_TOO_CLOSE = 0.30
 
@@ -61,9 +61,6 @@ MAZE_ROTATE_SPEED = 64
 LEFT_DOOR_COORDS_M = (1.20, 2.70)
 RIGHT_DOOR_COORDS_M = (1.90, 2.70)
 FINISH_LINE_M = 2.10
-
-# to avoid oscillation, in second, no point 1s since occ map is 1s
-PATH_UPDATE_PERIOD = 7
 
 UNMAPPED = 1
 OPEN = 2
@@ -160,6 +157,7 @@ class MasterNode(Node):
         self.leftDoor_pixel = (0, 0)
         self.rightDoor_pixel = (0, 0)
         self.finishLine_Ypixel = 0
+    
 
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
@@ -215,7 +213,7 @@ class MasterNode(Node):
         # constants
         self.linear_speed = 100
         # self.yaw_offset = 0
-        self.recalc_freq = 30  # frequency to recalculate target angle and fix direction (10 means every one second)
+        self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
         
         self.dest_x = []
@@ -232,7 +230,10 @@ class MasterNode(Node):
         self.lastPathUpdate = time.time()
         
         self.botx_pixel = 0
-        self.boty_pixel = 0       
+        self.boty_pixel = 0
+        
+        self.magicOriginx_pixel = 0
+        self.magicOriginy_pixel = 0       
         
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
@@ -297,6 +298,7 @@ class MasterNode(Node):
         self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
+        occTime = time.time()
         self.get_logger().info('[occ_callback]: new occ map!')
         
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
@@ -337,9 +339,12 @@ class MasterNode(Node):
         self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
         self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
         
+        
         # this gives the locations of magic origin in the occupancy map, in pixel
-        self.magicOriginx_pixel = round((-self.map_origin_x) / self.map_res)
-        self.magicOriginy_pixel = round((-self.map_origin_y) / self.map_res)
+        self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
+        self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
+        self.magicOriginx_pixel += self.offset_x
+        self.magicOriginy_pixel += self.offset_y
 
         # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
         self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
@@ -348,14 +353,14 @@ class MasterNode(Node):
 
         # find frontier points
         self.frontierSearch()
-
-        # recalculate path only after a PATH_UPDATE_PERIOD
-        # if (time.time() - self.lastPathUpdate) > PATH_UPDATE_PERIOD:
-        # self.lastPathUpdate = time.time() 
         
+        timeTaken = time.time() - occTime
+        self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+        
+
         if len(self.dest_x) > 0:
             # check the path for the last point which is the destination set last time
-            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1], self.dest_y[-1])
+            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
             
             if len(new_dest_x) == 0:
                 self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
@@ -386,7 +391,15 @@ class MasterNode(Node):
                 # update target points
                 self.dest_x = new_dest_x
                 self.dest_y = new_dest_y
+                
+        
+        # TEMPPP
+        # Convert the OccupancyGrid to a numpy array
+        self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
 
+        # Normalize the values to the range [0, 1]
+        self.oriorimap /= 100.0
+        
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
         self.pos_x = msg.position.x
@@ -440,10 +453,14 @@ class MasterNode(Node):
         # check if the robot is stuck in map and in frontier search
         # unmapped/obstacle is 0, open space 1
         wall = np.where(self.dilutedOccupancyMap == OBSTACLE, 1, 0)
-        if self.state == "frontier_search" and wall[self.boty_pixel][self.botx_pixel]:
+        if (self.state == "maze_rotating" or self.state == "maze_moving") and wall[self.boty_pixel][self.botx_pixel]:
             self.get_logger().info('[masterFSM]: ahhh stuck in wall')
             self.state = "escape_wall_lmao"
-        
+        else:
+            if self.magicState == "frontier_search" and self.frontierPoints == []:
+                self.get_logger().info('[masterFSM]: no more frontier points go to move_to_hallway')
+                self.state = self.magicState = "move_to_hallway"
+            
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
             servoAngle_msg = UInt8()
@@ -617,11 +634,6 @@ class MasterNode(Node):
                 self.move_straight_to(self.dest_x[0], self.dest_y[0])
 
         elif self.state == "frontier_search":
-            if len(self.frontierPoints) == 0:
-                self.get_logger().warn('[frontier_search]: no frontier points!!!; go to move_to_hallway')
-                self.state = self.magicState = "move_to_hallway"
-                return
-
             # # compare two frontier points and judge which we go first
             # # return True if p1 has higher priority than p2
             # def cmp(p1, p2):
@@ -882,106 +894,109 @@ class MasterNode(Node):
 
                 
         ''' ================================================ DEBUG PLOT ================================================ '''
-        try:
-            if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
-                PLOT_ORI = False
-                # PLOT_ORI = True
+        # try:
+        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 0.2:
+            # PLOT_ORI = False
+            PLOT_ORI = True
+            
+            if PLOT_ORI == False:
+                # Pixel values
+                ROBOT = 0
+                # UNMAPPED = 1
+                # OPEN = 2
+                # OBSTACLE = 3
+                MAGIC_ORIGIN = 4
+                ESTIMATE_DOOR = 5
+                FINISH_LINE = 6
+                FRONTIER = 7
+                FRONTIER_POINT = 8
+                PATH_PLANNING_POINT = 9
+
+                # shows the diluted occupancy map with frontiers and path planning points
+                self.totalMap = self.dilutedOccupancyMap.copy()
                 
-                if PLOT_ORI == False:
-                    # Pixel values
-                    ROBOT = 0
-                    # UNMAPPED = 1
-                    # OPEN = 2
-                    # OBSTACLE = 3
-                    MAGIC_ORIGIN = 4
-                    ESTIMATE_DOOR = 5
-                    FINISH_LINE = 6
-                    FRONTIER = 7
-                    FRONTIER_POINT = 8
-                    PATH_PLANNING_POINT = 9
+                # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
+                TARGET_SIZE_M = 5
+                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
 
-                    # shows the diluted occupancy map with frontiers and path planning points
-                    self.totalMap = self.dilutedOccupancyMap.copy()
+                # Calculate the necessary padding
+                padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
+                padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+
+                # Define the number of pixels to add to the height and width
+                padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+                padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+
+                # Pad the image
+                self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
+
+                try:
+                    # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
+                    self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
+                    self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
+
+                    self.totalMap[self.finishLine_Ypixel, :] = FINISH_LINE
+                except:
+                    self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
+
+                # Set the value of the frontier and the frontier points
+                for pixel in self.frontier:
+                    self.totalMap[pixel[0], pixel[1]] = FRONTIER
+
+                for pixel in self.frontierPoints:
+                    self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
+
+                # Set the value for the path planning points
+                for i in range(len(self.dest_x)):
+                    self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
+
+                colourList = ['black',
+                            (85/255, 85/255, 85/255),         # dark grey
+                            (170/255, 170/255, 170/255),      # light grey
+                            'white',
+                            (50/255, 205/255, 50/255),        # lime green
+                            (1, 1, 0),                        # yellow
+                            (0, 1, 0)                         # green
+                            ]
+
+                # add in colours for each type of pixel
+                if len(self.frontier) > 0:
+                    colourList.append((0, 1, 1))    # cyan
+
+                if len(self.frontierPoints) > 0:
+                    colourList.append((1, 0, 1))    # magenta
+
+                if len(self.dest_x) > 0:
+                    colourList.append((1, 165/255, 0))   # orange
                     
-                    # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
-                    TARGET_SIZE_M = 5
-                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
+                # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+                self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
 
-                    # Calculate the necessary padding
-                    padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
-                    padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+                # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
+                self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
 
-                    # Define the number of pixels to add to the height and width
-                    padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
-                    padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+                # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin
 
-                    # Pad the image
-                    self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
+                cmap = ListedColormap(colourList)
 
-                    try:
-                        # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
-                        self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
-                        self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
-
-                        self.totalMap[self.finishLine_Ypixel, :] = FINISH_LINE
-                    except:
-                        self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
-
-                    # Set the value of the frontier and the frontier points
-                    for pixel in self.frontier:
-                        self.totalMap[pixel[0], pixel[1]] = FRONTIER
-
-                    for pixel in self.frontierPoints:
-                        self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
-
-                    # Set the value for the path planning points
-                    for i in range(len(self.dest_x)):
-                        self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
-
-                    colourList = ['black',
-                                (85/255, 85/255, 85/255),         # dark grey
-                                (170/255, 170/255, 170/255),      # light grey
-                                'white',
-                                (50/255, 205/255, 50/255),        # lime green
-                                (1, 1, 0),                        # yellow
-                                (0, 1, 0)                         # green
-                                ]
-
-                    # add in colours for each type of pixel
-                    if len(self.frontier) > 0:
-                        colourList.append((0, 1, 1))    # cyan
-
-                    if len(self.frontierPoints) > 0:
-                        colourList.append((1, 0, 1))    # magenta
-
-                    if len(self.dest_x) > 0:
-                        colourList.append((1, 165/255, 0))   # orange
-                        
-                    # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
-                    self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
-
-                    # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
-                    self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
-
-                    # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin
-
-                    cmap = ListedColormap(colourList)
-
-                    plt.imshow(self.totalMap, origin='lower', cmap=cmap)
-                    
-                    plt.draw_all()
-                    # pause to make sure the plot gets created
-                    plt.pause(0.00000000001)
-                else:
-                    plt.imshow(self.occupancyMap, origin='lower')
-                            
-                    plt.draw_all()
-                    # pause to make sure the plot gets created
-                    plt.pause(0.00000000001)
+                plt.imshow(self.totalMap, origin='lower', cmap=cmap)
                 
-                self.lastPlot = time.time()
-        except:
-            self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
+                plt.draw_all()
+                # pause to make sure the plot gets created
+                plt.pause(0.00000000001)
+            else:
+                # plt.imshow(self.occupancyMap, origin='lower')
+                
+                # # cmap = colors.ListedColormap(['black', 'red', 'gray'])
+                # plt.imshow(self.oriorimap, cmap=cmap, origin='lower')
+                
+                # plt.draw_all()
+                # # pause to make sure the plot gets created
+                # plt.pause(0.00000000001)
+            
+            # self.lastPlot = time.time()
+        # except:
+        #     self.get_logger().info('[Debug Plotter]: Debug cannot plot')
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
@@ -993,6 +1008,8 @@ class MasterNode(Node):
         self.state = "maze_rotating"
 
     def find_path_to(self, tx, ty):
+        dickStarTime = time.time()
+        
         # unmapped/obstacle is 0, open space 1
         ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
         
@@ -1034,6 +1051,9 @@ class MasterNode(Node):
                         pre[ny][nx] = (y, x)
                         heapq.heappush(pq, (nd, ny, nx))
         self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
+
+        timeTaken = time.time() - dickStarTime
+        self.get_logger().info('[path_finding]: it took: %f' % timeTaken)
 
         if dist[ty][tx] == 1e18:
             return [], []
