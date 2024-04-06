@@ -52,14 +52,13 @@ class RobotControlNode(Node):
         publisher_period = 0.1  # seconds
         self.publisherFBTimer = self.create_timer(publisher_period, self.publisher_callback_state_feedback)
 
-        ''' ================================================ odometry ================================================ '''
-        # Create a subscriber to the topic "odom"
-        self.odom_subscription = self.create_subscription(
-            Odometry,
-            'odom',
-            self.odom_callback,
+        ''' ================================================ robot position ================================================ '''
+        # Create a subscriber to the topic
+        self.pos_subscription = self.create_subscription(
+            Pose,
+            'position',
+            self.pos_callback,
             10)
-        self.odom_subscription  # prevent unused variable warning
         self.yaw = 0
 
         ''' ================================================ cmd_linear ================================================ '''
@@ -96,10 +95,10 @@ class RobotControlNode(Node):
 
         self.get_logger().info("robotControlNode has started! :D")
 
-    def odom_callback(self, msg):
-        orientation_quat = msg.pose.pose.orientation
+    def pos_callback(self, msg):
+        orientation_quat = msg.orientation
         self.yaw = angle_from_quaternion(orientation_quat.x, orientation_quat.y, orientation_quat.z, orientation_quat.w)
-        self.get_logger().info("[odom_callback]: %f" % math.degrees(self.yaw))
+        self.get_logger().info("[pos_callback]: %f" % math.degrees(self.yaw))
 
     def linear_callback(self, msg):
         # -1 to -127    ==> 0% to -100% of the maximum speed
