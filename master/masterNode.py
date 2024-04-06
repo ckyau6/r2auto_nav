@@ -993,6 +993,7 @@ class MasterNode(Node):
                 # plt.draw_all()
                 # # pause to make sure the plot gets created
                 # plt.pause(0.00000000001)
+                pass
             
             # self.lastPlot = time.time()
         # except:
