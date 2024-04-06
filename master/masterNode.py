@@ -351,6 +351,9 @@ class MasterNode(Node):
         self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
         self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
 
+        # run dijkstra before any call to path_finding
+        self.dijkstra()
+
         # find frontier points
         self.frontierSearch()
         
@@ -1008,37 +1011,30 @@ class MasterNode(Node):
         self.deltaAngle_publisher.publish(deltaAngle)
         self.state = "maze_rotating"
 
-    def find_path_to(self, tx, ty):
+    def dijkstra(self):
         dickStarTime = time.time()
-        
+
         # unmapped/obstacle is 0, open space 1
         ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
-        
-        # first check that the point is not a wall
-        if ok[ty][tx] == 0:
-            self.get_logger().info('[path_finding]: cell (%d %d) is a wall' % (tx, ty))
-            return [], []
 
         # Dijkstra's algorithm
         # get grid coordination
         sx = self.botx_pixel
         sy = self.boty_pixel
-        dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
-        pre = [[(0, 0) for x in range(self.map_w)] for y in range(self.map_h)]
-        dist[sy][sx] = 0
+        self.dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
+        self.pre = [[(-1, -1) for x in range(self.map_w)] for y in range(self.map_h)]
+        self.dist[sy][sx] = 0
         pq = []
         heapq.heappush(pq, (0, sy, sx))
         dx = [0, 0, 1, -1]
         dy = [1, -1, 0, 0]
         while pq:
             d, y, x = heapq.heappop(pq)
-            if d > dist[y][x] + 0.001:
+            if d > self.dist[y][x] + 0.001:
                 continue
-            if y == ty and x == tx:
-                break
             for k in range(4):
                 ny, nx = y, x
-                nd = d + 1.5  # for taking rotation time into account, magical constant
+                nd = d + 5  # for taking rotation time into account, magical constant
                 while True:
                     ny += dy[k]
                     nx += dx[k]
@@ -1047,37 +1043,43 @@ class MasterNode(Node):
                         break
                     if ok[ny][nx] == 0:
                         break
-                    if dist[ny][nx] > nd:
-                        dist[ny][nx] = nd
-                        pre[ny][nx] = (y, x)
+                    if self.dist[ny][nx] > nd:
+                        self.dist[ny][nx] = nd
+                        self.pre[ny][nx] = (y, x)
                         heapq.heappush(pq, (nd, ny, nx))
-        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
 
         timeTaken = time.time() - dickStarTime
-        self.get_logger().info('[path_finding]: it took: %f' % timeTaken)
+        self.get_logger().info('[dijkstra]: it took: %f' % timeTaken)
 
-        if dist[ty][tx] == 1e18:
+    def find_path_to(self, tx, ty):
+        sx = self.botx_pixel
+        sy = self.boty_pixel
+
+        if self.pre[ty][tx] == (-1, -1):
+            self.get_logger().info('[path_finding]: no path from cell (%d %d) to cell (%d %d)' % (sx, sy, tx, ty))
             return [], []
-        else:
-            res_x = []
-            res_y = []
-            while True:
-                res_x.append(tx)
-                res_y.append(ty)
-                if ty == sy and tx == sx:
-                    break
-                ty, tx = pre[ty][tx]
-            res_x.reverse()
-            res_y.reverse()
-            if len(res_x) >= 3:
-                d_01 = abs(res_x[1] - res_x[0]) + abs(res_y[1] - res_y[0])
-                # d_12 = abs(res_x[2] - res_x[1]) + abs(res_y[2] - res_y[1])
-                if d_01 <= RADIUS_OF_IGNORE:
-                    res_x.pop(1)
-                    res_y.pop(1)
-            self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
-            
-            return res_x, res_y
+
+        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, self.dist[ty][tx]))
+
+        res_x = []
+        res_y = []
+        while True:
+            res_x.append(tx)
+            res_y.append(ty)
+            if ty == sy and tx == sx:
+                break
+            ty, tx = self.pre[ty][tx]
+        res_x.reverse()
+        res_y.reverse()
+        if len(res_x) >= 3:
+            d_01 = abs(res_x[1] - res_x[0]) + abs(res_y[1] - res_y[0])
+            # d_12 = abs(res_x[2] - res_x[1]) + abs(res_y[2] - res_y[1])
+            if d_01 <= RADIUS_OF_IGNORE:
+                res_x.pop(1)
+                res_y.pop(1)
+        self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
+
+        return res_x, res_y
         
     def move_to(self, tx, ty):
         self.get_logger().info('[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
