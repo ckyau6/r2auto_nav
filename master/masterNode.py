@@ -18,7 +18,7 @@ import sys, threading
 
 import argparse
 from collections import deque
-from skimage.morphology import dilation, disk
+#from skimage.morphology import dilation, disk
 
 import time
 
@@ -413,7 +413,7 @@ class MasterNode(Node):
         self.occ_subscription = self.create_subscription(
             OccupancyGrid,
             'map',
-            self.odom_callback,
+            self.occ_callback,
             qos_profile_sensor_data)
         self.occ_subscription  # prevent unused variable warning
         self.occupancyMap = self.dilutedOccupancyMap = self.frontierMap = np.array([])
@@ -572,6 +572,7 @@ class MasterNode(Node):
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         # self.yaw += self.yaw_offset
         # self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
+        self.get_logger().info(self.x)
 
     def robotControlNode_state_feedback_callback(self, msg):
         self.robotControlNodeState = msg.data
