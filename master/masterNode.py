@@ -22,6 +22,8 @@ from scipy.ndimage import generic_filter
 
 import time
 
+import cv2
+
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
 occ_bins = [-1, 0, 65, 100]
@@ -371,7 +373,7 @@ class MasterNode(Node):
 
         PARAMETER_R = 0.9
         # use odd number for window size
-        WINDOWSIZE = 11
+        WINDOWSIZE = 13
 
         # Define the function to apply over the moving window
         def func(window):
@@ -390,7 +392,7 @@ class MasterNode(Node):
         # regard unmapped area as perfectly blocked area
         self.processedOcc[unmapped_mask] = 100
 
-        self.get_logger().info(str(self.processedOcc == self.oriorimap))
+        # self.get_logger().info(str(self.processedOcc == self.oriorimap))
 
         # run dijkstra before any call to path_finding
         self.dijkstra()
@@ -485,12 +487,15 @@ class MasterNode(Node):
         self.destroy_node()
 
     def masterFSM(self):
+        self.get_logger().info('[masterFSM]: self.state: %s, self.magicState %s' % (self.state, self.magicState))
+
         # check if the robot is stuck in map and in frontier search
         # unmapped/obstacle is 0, open space 1
         wall = np.where(self.dilutedOccupancyMap == OBSTACLE, 1, 0)
         if (self.state == "maze_rotating" or self.state == "maze_moving") and wall[self.boty_pixel][self.botx_pixel]:
-            self.get_logger().info('[masterFSM]: ahhh stuck in wall')
-            self.state = "escape_wall_lmao"
+            # self.get_logger().info('[masterFSM]: ahhh stuck in wall')
+            # self.state = "escape_wall_lmao"
+            pass
         else:
             if self.magicState == "frontier_search" and self.frontierPoints == []:
                 self.get_logger().info('[masterFSM]: no more frontier points go to move_to_hallway')
@@ -930,23 +935,25 @@ class MasterNode(Node):
 
         ''' ================================================ DEBUG PLOT ================================================ '''
         # try:
-        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 0.2:
+        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
             # PLOT_ORI = False
-            PLOT_ORI = True
+            PLOT_ORI = False
+            PLOT_DILUTED = False
+            PLOT_PROCESSED = True
+            
+            # Pixel values
+            ROBOT = 0
+            # UNMAPPED = 1
+            # OPEN = 2
+            # OBSTACLE = 3
+            MAGIC_ORIGIN = 4
+            ESTIMATE_DOOR = 5
+            FINISH_LINE = 6
+            FRONTIER = 7
+            FRONTIER_POINT = 8
+            PATH_PLANNING_POINT = 9
 
-            if PLOT_ORI == False:
-                # Pixel values
-                ROBOT = 0
-                # UNMAPPED = 1
-                # OPEN = 2
-                # OBSTACLE = 3
-                MAGIC_ORIGIN = 4
-                ESTIMATE_DOOR = 5
-                FINISH_LINE = 6
-                FRONTIER = 7
-                FRONTIER_POINT = 8
-                PATH_PLANNING_POINT = 9
-
+            if PLOT_DILUTED == True:
                 # shows the diluted occupancy map with frontiers and path planning points
                 self.totalMap = self.dilutedOccupancyMap.copy()
 
@@ -1019,18 +1026,39 @@ class MasterNode(Node):
                 plt.draw_all()
                 # pause to make sure the plot gets created
                 plt.pause(0.00000000001)
-            else:
+            elif PLOT_PROCESSED == True:
+                self.totalMap = self.processedOcc.copy()
+                
+                # Normalize the array to the range 0-255
+                totalMap_normalized = ((self.totalMap - self.totalMap.min()) * (255 - 0) / (self.totalMap.max() - self.totalMap.min())).astype(np.uint8)
+
+                # Convert the normalized array to integers
+                totalMap_int = totalMap_normalized.astype(np.uint8)
+
+                # Convert the single-channel grayscale image to a three-channel RGB image
+                totalMap_rgb = cv2.cvtColor(totalMap_int, cv2.COLOR_GRAY2BGR)
+                
+                # Set the value for the path planning points
+                for i in range(len(self.dest_x)):
+                    totalMap_rgb[self.dest_y[i]][self.dest_x[i]] = (0, 255, 0)
+
+                # Display the image using matplotlib.pyplot
+                plt.imshow(cv2.cvtColor(totalMap_rgb, cv2.COLOR_BGR2RGB), origin='lower')
+                plt.draw_all()
+                plt.pause(0.00000000001)
+                
+            elif PLOT_ORI == True:
                 # plt.imshow(self.occupancyMap, origin='lower')
 
                 # cmap = ListedColormap(['black', 'red', 'gray'])
-                plt.imshow(self.processedOcc, cmap='gray', origin='lower')
-                # plt.imshow(self.oriorimap, cmap=cmap, origin='lower')
+                # plt.imshow(self.processedOcc, cmap='gray', origin='lower')
+                plt.imshow(self.oriorimap, cmap=cmap, origin='lower')
 
                 plt.draw_all()
                 # pause to make sure the plot gets created
                 plt.pause(0.00000000001)
 
-            # self.lastPlot = time.time()
+            self.lastPlot = time.time()
         # except:
         #     self.get_logger().info('[Debug Plotter]: Debug cannot plot')
 
@@ -1045,10 +1073,10 @@ class MasterNode(Node):
 
     # map values in the processed map (0 ~ 100) to evaluated values (1 ~ inf)
     def cost_function(self, occ_value):
-        if occ_value <= 50:
+        if occ_value <= 30:
             return 1
         else:
-            return (51 / (101 - occ_value) - 1) * 1e5 + 1
+            return (71 / (101 - occ_value) - 1) * 1e8 + 1
 
     def dijkstra(self):
         dickStarTime = time.time()
@@ -1057,34 +1085,48 @@ class MasterNode(Node):
         # get grid coordination
         sx = self.botx_pixel
         sy = self.boty_pixel
-        self.dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
-        self.pre = [[(-1, -1) for x in range(self.map_w)] for y in range(self.map_h)]
-        self.dist[sy][sx] = 0
+        p_dist = [[[1e18 for _ in range(4)] for x in range(self.map_w)] for y in range(self.map_h)]
+        p_pre = [[[(-1, -1) for _ in range(4)] for x in range(self.map_w)] for y in range(self.map_h)]
+        cur_dir = round(self.yaw / 90) % 4
+        p_dist[sy][sx][cur_dir] = 0
         pq = []
-        heapq.heappush(pq, (0, sy, sx))
-        dx = [0, 0, 1, -1]
-        dy = [1, -1, 0, 0]
+        heapq.heappush(pq, (0, sy, sx, cur_dir))
+        dx = [1, 0, -1, 0]
+        dy = [0, 1, 0, -1]
         while pq:
-            d, y, x = heapq.heappop(pq)
-            if d > self.dist[y][x] + 0.001:
+            d, y, x, dir = heapq.heappop(pq)
+            # self.get_logger().info('[dijkstra]: d: %f, y: %d, x: %d, dir: %d' % (d, y, x, dir))
+            if d > p_dist[y][x][dir]:
                 continue
             for k in range(4):
-                ny, nx = y, x
-                nd = d + 5  # for taking rotation time into account, magical constant
-                while True:
-                    ny += dy[k]
-                    nx += dx[k]
-                    if ny < 0 or ny >= self.map_h or nx < 0 or nx >= self.map_w:
-                        break
-                    nd += self.cost_function(self.processedOcc[nx][ny])
-                    if self.dist[ny][nx] > nd:
-                        self.dist[ny][nx] = nd
-                        self.pre[ny][nx] = (y, x)
-                        heapq.heappush(pq, (nd, ny, nx))
+                r = (k - dir) % 4
+                r = min(r, 4 - r)
+                nd = d + 5 * r # for taking rotation time into account, magical constant
+                if p_dist[y][x][k] > nd:
+                    p_dist[y][x][k] = nd
+                    p_pre[y][x][k] = p_pre[y][x][dir]
+                    heapq.heappush(pq, (nd, y, x, k))
+            ny = y + dy[dir]
+            nx = x + dx[dir]
+            if ny < 0 or ny >= self.map_h or nx < 0 or nx >= self.map_w:
+                continue
+            nd = d + self.cost_function(self.processedOcc[ny][nx])
+            if p_dist[ny][nx][dir] > nd:
+                p_dist[ny][nx][dir] = nd
+                p_pre[ny][nx][dir] = (y, x)
+                heapq.heappush(pq, (nd, ny, nx, dir))
 
         timeTaken = time.time() - dickStarTime
         self.get_logger().info('[dijkstra]: it took: %f' % timeTaken)
-                                                                                                                                                                                                                                                                               m
+        self.dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
+        self.pre = [[(-1, -1) for x in range(self.map_w)] for y in range(self.map_h)]
+        for y in range(self.map_h):
+            for x in range(self.map_w):
+                opt_k = np.argmin(p_dist[y][x])
+                self.dist[y][x] = p_dist[y][x][opt_k]
+                self.pre[y][x] = p_pre[y][x][opt_k]
+                    
+        
     def find_path_to(self, tx, ty):
         sx = self.botx_pixel
         sy = self.boty_pixel
@@ -1098,6 +1140,10 @@ class MasterNode(Node):
         res_x = []
         res_y = []
         while True:
+            if len(res_x) >= 2:
+                if res_x[-2] == res_x[-1] == tx or res_y[-2] == res_y[-1] == ty:
+                    res_x.pop()
+                    res_y.pop()
             res_x.append(tx)
             res_y.append(ty)
             if ty == sy and tx == sx:
