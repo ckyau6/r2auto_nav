@@ -1,0 +1,9 @@
+[1.103s] Invoking command in '/home/ckyau/colcon_ws/src/auto_nav/auto_nav': PYTHONPATH=/home/ckyau/colcon_ws/src/auto_nav/auto_nav/build/auto_nav/prefix_override:/home/ckyau/colcon_ws/src/auto_nav/auto_nav/install/auto_nav/lib/python3.8/site-packages:${PYTHONPATH} /usr/bin/python3 setup.py egg_info --egg-base build/auto_nav build --build-base /home/ckyau/colcon_ws/src/auto_nav/auto_nav/build/auto_nav/build install --record /home/ckyau/colcon_ws/src/auto_nav/auto_nav/build/auto_nav/install.log --single-version-externally-managed
+[1.339s] running egg_info
+[1.339s] writing build/auto_nav/auto_nav.egg-info/PKG-INFO
+[1.340s] writing dependency_links to build/auto_nav/auto_nav.egg-info/dependency_links.txt
+[1.340s] writing entry points to build/auto_nav/auto_nav.egg-info/entry_points.txt
+[1.340s] writing requirements to build/auto_nav/auto_nav.egg-info/requires.txt
+[1.340s] writing top-level names to build/auto_nav/auto_nav.egg-info/top_level.txt
+[1.393s] error: package directory 'auto_nav' does not exist
+[1.421s] Invoked command in '/home/ckyau/colcon_ws/src/auto_nav/auto_nav' returned '1': PYTHONPATH=/home/ckyau/colcon_ws/src/auto_nav/auto_nav/build/auto_nav/prefix_override:/home/ckyau/colcon_ws/src/auto_nav/auto_nav/install/auto_nav/lib/python3.8/site-packages:${PYTHONPATH} /usr/bin/python3 setup.py egg_info --egg-base build/auto_nav build --build-base /home/ckyau/colcon_ws/src/auto_nav/auto_nav/build/auto_nav/build install --record /home/ckyau/colcon_ws/src/auto_nav/auto_nav/build/auto_nav/install.log --single-version-externally-managed

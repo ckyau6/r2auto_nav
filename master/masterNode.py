@@ -27,11 +27,11 @@ import scipy.stats
 occ_bins = [-1, 0, 50, 100]
 
 # SOME STUFF
-lookahead_distance : 0.24 #distance at which the robot will look ahead to determine its next action
-speed : 0.18 #maximum velocity of the robot
-expansion_size : 3 #extent to which obstacles are expanded in the costmap
-target_error : 0.15 #acceptable error margin from the target position
-robot_r : 0.2 #safety distance around the robot
+lookahead_distance = 0.24 #distance at which the robot will look ahead to determine its next action
+speed = 0.18 #maximum velocity of the robot
+expansion_size = 3 #extent to which obstacles are expanded in the costmap
+target_error = 0.15 #acceptable error margin from the target position
+robot_r = 0.2 #safety distance around the robot
 
 pathGlobal = 0
 
@@ -433,7 +433,7 @@ class MasterNode(Node):
             'position',
             self.pos_callback,
             10)
-        self.pos_y = self.pos_x = self.yaw = 0
+        self.y = self.x = self.yaw = 0
 
         
 
@@ -572,7 +572,6 @@ class MasterNode(Node):
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         # self.yaw += self.yaw_offset
         # self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
-        self.get_logger().info(self.x)
 
     def robotControlNode_state_feedback_callback(self, msg):
         self.robotControlNodeState = msg.data
@@ -601,6 +600,9 @@ class MasterNode(Node):
         
         self.destroy_node()
     
+    def target_callback(self):
+        exploration(self.data,self.width,self.height,self.resolution,self.c,self.r,self.originX,self.originY)
+
     def masterFSM(self):
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
