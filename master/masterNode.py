@@ -62,7 +62,10 @@ MAZE_ROTATE_SPEED = 64
 # left, right door and finish line coords in meters from the magic origin
 LEFT_DOOR_COORDS_M = (1.20, 2.70)
 RIGHT_DOOR_COORDS_M = (1.90, 2.70)
-FINISH_LINE_M = 2.10
+FINISH_LINE_M = ((LEFT_DOOR_COORDS_M[0] + RIGHT_DOOR_COORDS_M[0])/2, 2.10)
+
+# in s
+DOOR_ENTER_TIME = 5
 
 UNMAPPED = 1
 OPEN = 2
@@ -158,7 +161,7 @@ class MasterNode(Node):
 
         self.leftDoor_pixel = (0, 0)
         self.rightDoor_pixel = (0, 0)
-        self.finishLine_Ypixel = 0
+        self.finishLine_pixel = 0
     
 
         ''' ================================================ robot position ================================================ '''
@@ -300,8 +303,9 @@ class MasterNode(Node):
         self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
-        self.get_logger().info('[occ_callback]: new occ map!')
+        # self.get_logger().info('[occ_callback]: new occ map!')
         
+        ''' ================================================ Update coordinates ================================================ '''
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
         self.map_w = msg.info.width
         self.map_h = msg.info.height
@@ -321,8 +325,10 @@ class MasterNode(Node):
         # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
         self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
         self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
-        
+        self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res), round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res))
+       
+        ''' ================================================ Gradeint Map ================================================ '''
+
         # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
         # 
         # TEMPPP
@@ -339,7 +345,7 @@ class MasterNode(Node):
         PARAMETER_R = 0.9
         # use odd number for window size
         WINDOWSIZE = 11
-        occTime = time.time()
+        # occTime = time.time()
         
         # Define the function to apply over the moving window
         def func(window):
@@ -355,13 +361,11 @@ class MasterNode(Node):
         # Apply the function over a moving window on the image
         self.processedOcc = generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))
         
-        self.get_logger().info(str(self.processedOcc == self.oriorimap))
 
-        
-        
-        timeTaken = time.time() - occTime
-        self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+        # timeTaken = time.time() - occTime
+        # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
 
+        ''' ================================================ Dilution ================================================ '''
         # this converts the occupancy grid to an 1d array of map, umpapped, occupied
         occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count', bins=occ_bins)
     
@@ -390,16 +394,15 @@ class MasterNode(Node):
         # Apply the dilation only within the OPEN areas
         self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
         
-        
+        ''' ================================================ Frontier ================================================ '''
         
         # find frontier points
         self.frontierSearch()
         
-        
-
+        ''' ================================================ Path update ================================================ '''
         if len(self.dest_x) > 0:
             # check the path for the last point which is the destination set last time
-            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
+            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y, print=True)
             
             if len(new_dest_x) == 0:
                 self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
@@ -444,10 +447,22 @@ class MasterNode(Node):
         self.robotControlNodeState = msg.data
 
     def fsmDebug_callback(self, msg):
-        if msg.data == "frontier_search":
-            self.state = self.magicState = "frontier_search"
-        elif msg.data == "idle":
-            self.state = self.magicState = "idle"
+        self.stateList = ["idle", 
+                          "maze_rotating", 
+                          "maze_moving", 
+                          "escape_wall_lmao", 
+                          "frontier_search", 
+                          "move_to_hallway", 
+                          "http_request", 
+                          "go_to_left_door", 
+                          "go_to_right_door", 
+                          "rotate_to_left_door", 
+                          "rotate_to_right_door", 
+                          "enter_to_left_door",
+                          "enter_to_right_door",
+                          "checking_walls_distance"] 
+        if msg.data in self.stateList:
+            self.state = self.magicState = msg.data
         else:
             mode, tx, ty = map(int, self.state.split())
             if mode == 0:
@@ -481,12 +496,15 @@ class MasterNode(Node):
         self.destroy_node()
     
     def masterFSM(self):
+        self.get_logger().info('[masterFSM]: self.state: %s, self.magicState %s' % (self.state, self.magicState))
+        
         # check if the robot is stuck in map and in frontier search
         # unmapped/obstacle is 0, open space 1
         wall = np.where(self.dilutedOccupancyMap == OBSTACLE, 1, 0)
         if (self.state == "maze_rotating" or self.state == "maze_moving") and wall[self.boty_pixel][self.botx_pixel]:
-            self.get_logger().info('[masterFSM]: ahhh stuck in wall')
-            self.state = "escape_wall_lmao"
+            # self.get_logger().info('[masterFSM]: ahhh stuck in wall')
+            # self.state = "escape_wall_lmao"
+            pass
         else:
             if self.magicState == "frontier_search" and self.frontierPoints == []:
                 self.get_logger().info('[masterFSM]: no more frontier points go to move_to_hallway')
@@ -515,9 +533,16 @@ class MasterNode(Node):
             
         elif self.state == "maze_rotating":
             # self.get_logger().info('current yaw: %f' % self.yaw)
+            
             self.get_logger().info('[maze_rotating]: rotating')
             
             if self.robotControlNodeState == "rotateStop":
+                # check that dist is not empty (its empty for cases where maze_moving is used to rotate only)
+                if len(self.dest_x) == 0:
+                    self.get_logger().info('[maze_rotating]: no more destination; get back to magicState: %s' % self.magicState)
+                    self.state = self.magicState
+                    return
+                
                 # set linear to start moving forward
                 linear_msg = Int8()
                 linear_msg.data = self.linear_speed
@@ -527,7 +552,7 @@ class MasterNode(Node):
                 
                 # reset recalc_stat
                 self.recalc_stat = 0
-        elif self.state == "maze_moving":
+        elif self.state == "maze_moving":        
             # if reached the destination (within one pixel), stop and move to the next destination
             self.get_logger().info('[maze_moving]: moving')
             
@@ -683,16 +708,17 @@ class MasterNode(Node):
             self.move_to(destination[0], destination[1])
             
         elif self.state == "move_to_hallway":
-            # TEMPORARY change to move to coords and jump to http_request
-            # set linear to be zero
-            linear_msg = Int8()
-            linear_msg.data = 0
-            self.linear_publisher.publish(linear_msg)
-            
-            # set delta angle = 0 to stop
-            deltaAngle_msg = Float64()
-            deltaAngle_msg.data = 0.0
-            self.deltaAngle_publisher.publish(deltaAngle_msg)
+            # check if hall way is reachable
+            # if not reachable, throw error (or do somthing else)
+            # else move to the hallway
+            if len(self.find_path_to(self.finishLine_pixel[0], self.finishLine_pixel[1])[0]) == 0:
+                self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
+            else:
+                self.get_logger().info('[move_to_hallway]: going to finishLine_pixel: (%d, %d)' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
+                self.move_to(self.finishLine_pixel[0], self.finishLine_pixel[1], print=True)
+                
+                # set magicState to be http_request, so that once at hall way point, it will open the door
+                self.magicState = "http_request"
 
         elif self.state == "http_request":
             if self.doorStatus == "idle":
@@ -711,26 +737,128 @@ class MasterNode(Node):
                 self.state = self.magicState = "go_to_right_door"
                 
             elif self.doorStatus == "connection error":
-                self.get_logger().info('[http_request]: connection error')
+                self.get_logger().warn('[http_request]: connection error')
                 
             elif self.doorStatus == "http error":
-                self.get_logger().info('[http_request]: http error')
+                self.get_logger().warn('[http_request]: http error')
             
             else:
                 self.get_logger().info('[http_request]: msg error')
                 
         elif self.state == "go_to_left_door":
-            pass
+            # check if left door is reachable
+            # if not reachable, throw error (or do somthing else)
+            # else move to the left door
+            if len(self.find_path_to(self.leftDoor_pixel[0], self.leftDoor_pixel[1])[0]) == 0:
+                self.get_logger().warn('[go_to_left_door]: leftDoor_pixel: (%d, %d) is not reachable' % (self.leftDoor_pixel[0], self.leftDoor_pixel[1]))
+            else:
+                self.get_logger().info('[go_to_left_door]: going to leftDoor_pixel: (%d, %d)' % (self.leftDoor_pixel[0], self.leftDoor_pixel[1]))
+                self.move_to(self.leftDoor_pixel[0], self.leftDoor_pixel[1], print=True)
+                
+                # set magicState to be rotate_to_left_door, so that once at door, it will rotate_to_left_door
+                self.magicState = "rotate_to_left_door"
             
         elif self.state == "go_to_right_door":
-            pass
+            # check if right door is reachable
+            # if not reachable, throw error (or do somthing else)
+            # else move to the right door
+            if len(self.find_path_to(self.rightDoor_pixel[0], self.rightDoor_pixel[1])[0]) == 0:
+                self.get_logger().warn('[go_to_left_door]: rightDoor_pixel: (%d, %d) is not reachable' % (self.rightDoor_pixel[0], self.rightDoor_pixel[1]))
+            else:
+                self.get_logger().info('[go_to_left_door]: going to rightDoor_pixel: (%d, %d)' % (self.rightDoor_pixel[0], self.rightDoor_pixel[1]))
+                self.move_to(self.rightDoor_pixel[0], self.rightDoor_pixel[1], print=True)
+                
+                # set magicState to be rotate_to_right_door, so that once at door, it will rotate_to_right_door
+                self.magicState = "rotate_to_right_door"
+                
+        elif self.state == "rotate_to_left_door":
+            # this assume that the robot is started straight and door is perpendicular to the robot starting yaw
+            # set linear to be zero
+            linear_msg = Int8()
+            linear_msg.data = 0
+            self.linear_publisher.publish(linear_msg)
+                
+            # roate to face left door, whichis at yaw = 180
+            deltaAngle = Float64()
+            deltaAngle.data = 180.0 - self.yaw
             
-        elif self.state == "enter_left_door":
-            pass
+            # add safe guard of 180
+            if deltaAngle.data == 180:
+                deltaAngle.data = 179
             
-        elif self.state == "enter_right_door":
-            pass
-
+            self.deltaAngle_publisher.publish(deltaAngle)
+            self.state = "maze_rotating"
+            
+            # # temp
+            # self.magicState = "idle"
+            
+            # set magicState to be enter_to_left_door, so that once rotated to face door, it will enter_to_left_door
+            self.magicState = "enter_to_left_door"
+            
+        elif self.state == "rotate_to_right_door":
+            # this assume that the robot is started straight and door is perpendicular to the robot starting yaw
+            # set linear to be zero
+            linear_msg = Int8()
+            linear_msg.data = 0
+            self.linear_publisher.publish(linear_msg)
+            
+            # roate to face left door, whichis at yaw = 0
+            deltaAngle = Float64()
+            deltaAngle.data = 0.0 - self.yaw
+            
+            # add safe guard of 180
+            if deltaAngle.data == 180:
+                deltaAngle.data = 179
+            
+            self.deltaAngle_publisher.publish(deltaAngle)
+            self.state = "maze_rotating"
+            
+            # # temp
+            # self.magicState = "idle"
+            
+            # set magicState to be enter_to_right_door, so that once rotated to face door, it will enter_to_right_door
+            self.magicState = "enter_to_right_door"
+            
+        elif self.state == "enter_to_left_door":
+            # move forward until DOOR_ENTER_TIME
+            startTime = time.time()
+            while time.time() - startTime < DOOR_ENTER_TIME:
+                # set linear to be 127 to move forward fastest
+                linear_msg = Int8()
+                linear_msg.data = self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+            
+            # set magicState to start bucket task after moving in to room
+            # self.magicState = "checking_walls_distance"
+            
+            # temp
+            self.state = self.magicState = "idle"
+            
+        elif self.state == "enter_to_right_door":
+            # move forward until DOOR_ENTER_TIME
+            startTime = time.time()
+            while time.time() - startTime < DOOR_ENTER_TIME:
+                # set linear to be 127 to move forward fastest
+                linear_msg = Int8()
+                linear_msg.data = self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+            
+            # set magicState to start bucket task after moving in to room
+            # self.magicState = "checking_walls_distance"
+            
+            # temp
+            self.state = self.magicState = "idle"
+            
         elif self.state == "checking_walls_distance":
             # lidar minimum is 12 cm send by node, datasheet says 16 cm
             # by experimentation need 30 cm
@@ -771,8 +899,8 @@ class MasterNode(Node):
                 # get the index of the front left, front right, back, left, right               
                 # move until the back is more than 40 cm or stop if the front is less than 30 cm
                 # 40cm must be more than the 30cm from smallest distance, so that it wont rotate and get diff distance, lidar is not the center of rotation
-                # must use any not all incase of NaN
-                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketfFrontRightIndex:] < BUCKET_TOO_CLOSE):
+                # must use any not all incase of NaN                                                           
+                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE):
                     # infront got something
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
                     
@@ -926,9 +1054,9 @@ class MasterNode(Node):
                 
         ''' ================================================ DEBUG PLOT ================================================ '''
         # try:
-        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 0.2:
-            # PLOT_ORI = False
-            PLOT_ORI = True
+        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
+            PLOT_ORI = False
+            # PLOT_ORI = True
             
             if PLOT_ORI == False:
                 # Pixel values
@@ -948,7 +1076,7 @@ class MasterNode(Node):
                 
                 # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
                 TARGET_SIZE_M = 5
-                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
+                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0])
 
                 # Calculate the necessary padding
                 padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
@@ -966,7 +1094,7 @@ class MasterNode(Node):
                     self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
                     self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
 
-                    self.totalMap[self.finishLine_Ypixel, :] = FINISH_LINE
+                    self.totalMap[self.finishLine_pixel[1], self.finishLine_pixel[0]] = FINISH_LINE
                 except:
                     self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
 
@@ -1026,28 +1154,41 @@ class MasterNode(Node):
                 # pause to make sure the plot gets created
                 plt.pause(0.00000000001)
             
-            # self.lastPlot = time.time()
+            self.lastPlot = time.time()
         # except:
         #     self.get_logger().info('[Debug Plotter]: Debug cannot plot')
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
+                
         self.get_logger().info('[move_straight_to]: currently at (%d %d) with yaw %f, moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, self.yaw, tx, ty))
         # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
         deltaAngle = Float64()
         deltaAngle.data = target_yaw - self.yaw
+        
+        # add safe guard of 180
+        if deltaAngle == 180:
+            deltaAngle = 179
+            
         self.deltaAngle_publisher.publish(deltaAngle)
         self.state = "maze_rotating"
 
-    def find_path_to(self, tx, ty):
-        dickStarTime = time.time()
+    def find_path_to(self, tx, ty, print=False):
+        # dickStarTime = time.time()
         
         # unmapped/obstacle is 0, open space 1
         ok = np.where(self.dilutedOccupancyMap == 2, 1, 0)
         
-        # first check that the point is not a wall
+        # 1st check that the point is within the map
+        if tx < 0 or tx >= self.map_w or ty < 0 or ty >= self.map_h:
+            if print:
+                self.get_logger().warn('[path_finding]: cell (%d %d) is out of map' % (tx, ty))
+            return [], []
+        
+        # 2nd check that the point is not a wall
         if ok[ty][tx] == 0:
-            self.get_logger().info('[path_finding]: cell (%d %d) is a wall' % (tx, ty))
+            if print:
+                self.get_logger().info('[path_finding]: cell (%d %d) is a wall' % (tx, ty))
             return [], []
 
         # Dijkstra's algorithm
@@ -1082,10 +1223,11 @@ class MasterNode(Node):
                         dist[ny][nx] = nd
                         pre[ny][nx] = (y, x)
                         heapq.heappush(pq, (nd, ny, nx))
-        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
+        if print:
+            self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, dist[ty][tx]))
 
-        timeTaken = time.time() - dickStarTime
-        self.get_logger().info('[path_finding]: it took: %f' % timeTaken)
+        # timeTaken = time.time() - dickStarTime
+        # self.get_logger().info('[path_finding]: it took: %f' % timeTaken)
 
         if dist[ty][tx] == 1e18:
             return [], []
@@ -1106,13 +1248,15 @@ class MasterNode(Node):
                 if d_01 <= RADIUS_OF_IGNORE:
                     res_x.pop(1)
                     res_y.pop(1)
-            self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
+                    
+            if print:
+                self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
             
             return res_x, res_y
         
     def move_to(self, tx, ty):
         self.get_logger().info('[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
-        self.dest_x, self.dest_y = self.find_path_to(tx, ty)
+        self.dest_x, self.dest_y = self.find_path_to(tx, ty, print=True)
 
         if len(self.dest_x) == 0:
             self.get_logger().info('[move_to]: no path found get back to magicState: %s' % self.magicState)
@@ -1222,7 +1366,7 @@ class MasterNode(Node):
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
                 
                 # skip if it is not reachable
-                self.get_logger().info('[frontierSearch]: checking if frontier is recheable')
+                # self.get_logger().info('[frontierSearch]: checking if frontier is recheable')
                 if len(self.find_path_to(middle_x, middle_y)[0]) == 0:
                     continue
 
