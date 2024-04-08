@@ -5,13 +5,16 @@ from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import UInt8, UInt16, Float64, String, Int8
 from geometry_msgs.msg import Twist, Pose
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from PIL import Image
 import math
 import heapq
+import random
+import scipy.interpolate as si
+import sys, threading
 
 import argparse
 from collections import deque
@@ -22,6 +25,15 @@ import time
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
 occ_bins = [-1, 0, 50, 100]
+
+# SOME STUFF
+lookahead_distance : 0.24 #distance at which the robot will look ahead to determine its next action
+speed : 0.18 #maximum velocity of the robot
+expansion_size : 3 #extent to which obstacles are expanded in the costmap
+target_error : 0.15 #acceptable error margin from the target position
+robot_r : 0.2 #safety distance around the robot
+
+pathGlobal = 0
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
@@ -64,6 +76,272 @@ def angle_from_quaternion(x, y, z, w):
     t3 = +2.0 * (w * z + x * y)
     t4 = +1.0 - 2.0 * (y * y + z * z)
     return math.degrees(math.atan2(t3, t4))
+
+def heuristic(a, b):
+    return np.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2)
+
+def astar(array, start, goal):
+    neighbors = [(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)]
+    close_set = set()
+    came_from = {}
+    gscore = {start:0}
+    fscore = {start:heuristic(start, goal)}
+    oheap = []
+    heapq.heappush(oheap, (fscore[start], start))
+    while oheap:
+        current = heapq.heappop(oheap)[1]
+        if current == goal:
+            data = []
+            while current in came_from:
+                data.append(current)
+                current = came_from[current]
+            data = data + [start]
+            data = data[::-1]
+            return data
+        close_set.add(current)
+        for i, j in neighbors:
+            neighbor = current[0] + i, current[1] + j
+            tentative_g_score = gscore[current] + heuristic(current, neighbor)
+            if 0 <= neighbor[0] < array.shape[0]:
+                if 0 <= neighbor[1] < array.shape[1]:                
+                    if array[neighbor[0]][neighbor[1]] == 1:
+                        continue
+                else:
+                    # array bound y walls
+                    continue
+            else:
+                # array bound x walls
+                continue
+            if neighbor in close_set and tentative_g_score >= gscore.get(neighbor, 0):
+                continue
+            if  tentative_g_score < gscore.get(neighbor, 0) or neighbor not in [i[1]for i in oheap]:
+                came_from[neighbor] = current
+                gscore[neighbor] = tentative_g_score
+                fscore[neighbor] = tentative_g_score + heuristic(neighbor, goal)
+                heapq.heappush(oheap, (fscore[neighbor], neighbor))
+    # If no path to goal was found, return closest path to goal
+    if goal not in came_from:
+        closest_node = None
+        closest_dist = float('inf')
+        for node in close_set:
+            dist = heuristic(node, goal)
+            if dist < closest_dist:
+                closest_node = node
+                closest_dist = dist
+        if closest_node is not None:
+            data = []
+            while closest_node in came_from:
+                data.append(closest_node)
+                closest_node = came_from[closest_node]
+            data = data + [start]
+            data = data[::-1]
+            return data
+    return False
+
+def bspline_planning(array, sn):
+    try:
+        array = np.array(array)
+        x = array[:, 0]
+        y = array[:, 1]
+        N = 2
+        t = range(len(x))
+        x_tup = si.splrep(t, x, k=N)
+        y_tup = si.splrep(t, y, k=N)
+
+        x_list = list(x_tup)
+        xl = x.tolist()
+        x_list[1] = xl + [0.0, 0.0, 0.0, 0.0]
+
+        y_list = list(y_tup)
+        yl = y.tolist()
+        y_list[1] = yl + [0.0, 0.0, 0.0, 0.0]
+
+        ipl_t = np.linspace(0.0, len(x) - 1, sn)
+        rx = si.splev(ipl_t, x_list)
+        ry = si.splev(ipl_t, y_list)
+        path = [(rx[i],ry[i]) for i in range(len(rx))]
+    except:
+        path = array
+    return path
+
+
+def pure_pursuit(current_x, current_y, current_heading, path, index):
+    global lookahead_distance
+    closest_point = None
+    v = speed
+    for i in range(index,len(path)):
+        x = path[i][0]
+        y = path[i][1]
+        distance = math.hypot(current_x - x, current_y - y)
+        if lookahead_distance < distance:
+            closest_point = (x, y)
+            index = i
+            break
+    if closest_point is not None:
+        target_heading = math.atan2(closest_point[1] - current_y, closest_point[0] - current_x)
+        desired_steering_angle = target_heading - current_heading
+    else:
+        target_heading = math.atan2(path[-1][1] - current_y, path[-1][0] - current_x)
+        desired_steering_angle = target_heading - current_heading
+        index = len(path)-1
+    if desired_steering_angle > math.pi:
+        desired_steering_angle -= 2 * math.pi
+    elif desired_steering_angle < -math.pi:
+        desired_steering_angle += 2 * math.pi
+    if desired_steering_angle > math.pi/6 or desired_steering_angle < -math.pi/6:
+        sign = 1 if desired_steering_angle > 0 else -1
+        desired_steering_angle = sign * math.pi/4
+        v = 0.0
+    return v,desired_steering_angle,index
+
+def frontierB(matrix):
+    for i in range(len(matrix)):
+        for j in range(len(matrix[i])):
+            if matrix[i][j] == 0.0:
+                if i > 0 and matrix[i-1][j] < 0:
+                    matrix[i][j] = 2
+                elif i < len(matrix)-1 and matrix[i+1][j] < 0:
+                    matrix[i][j] = 2
+                elif j > 0 and matrix[i][j-1] < 0:
+                    matrix[i][j] = 2
+                elif j < len(matrix[i])-1 and matrix[i][j+1] < 0:
+                    matrix[i][j] = 2
+    return matrix
+
+def assign_groups(matrix):
+    group = 1
+    groups = {}
+    for i in range(len(matrix)):
+        for j in range(len(matrix[0])):
+            if matrix[i][j] == 2:
+                group = dfs(matrix, i, j, group, groups)
+    return matrix, groups
+
+def dfs(matrix, i, j, group, groups):
+    if i < 0 or i >= len(matrix) or j < 0 or j >= len(matrix[0]):
+        return group
+    if matrix[i][j] != 2:
+        return group
+    if group in groups:
+        groups[group].append((i, j))
+    else:
+        groups[group] = [(i, j)]
+    matrix[i][j] = 0
+    dfs(matrix, i + 1, j, group, groups)
+    dfs(matrix, i - 1, j, group, groups)
+    dfs(matrix, i, j + 1, group, groups)
+    dfs(matrix, i, j - 1, group, groups)
+    dfs(matrix, i + 1, j + 1, group, groups) # sağ alt çapraz
+    dfs(matrix, i - 1, j - 1, group, groups) # sol üst çapraz
+    dfs(matrix, i - 1, j + 1, group, groups) # sağ üst çapraz
+    dfs(matrix, i + 1, j - 1, group, groups) # sol alt çapraz
+    return group + 1
+
+def fGroups(groups):
+    sorted_groups = sorted(groups.items(), key=lambda x: len(x[1]), reverse=True)
+    top_five_groups = [g for g in sorted_groups[:5] if len(g[1]) > 2]    
+    return top_five_groups
+
+def calculate_centroid(x_coords, y_coords):
+    n = len(x_coords)
+    sum_x = sum(x_coords)
+    sum_y = sum(y_coords)
+    mean_x = sum_x / n
+    mean_y = sum_y / n
+    centroid = (int(mean_x), int(mean_y))
+    return centroid
+
+def findClosestGroup(matrix,groups, current,resolution,originX,originY):
+    targetP = None
+    distances = []
+    paths = []
+    score = []
+    max_score = -1 #max score index
+    for i in range(len(groups)):
+        middle = calculate_centroid([p[0] for p in groups[i][1]],[p[1] for p in groups[i][1]]) 
+        path = astar(matrix, current, middle)
+        path = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
+        total_distance = pathLength(path)
+        distances.append(total_distance)
+        paths.append(path)
+    for i in range(len(distances)):
+        if distances[i] == 0:
+            score.append(0)
+        else:
+            score.append(len(groups[i][1])/distances[i])
+    for i in range(len(distances)):
+        if distances[i] > target_error*3:
+            if max_score == -1 or score[i] > score[max_score]:
+                max_score = i
+    if max_score != -1:
+        targetP = paths[max_score]
+    else: #gruplar target_error*2 uzaklıktan daha yakınsa random bir noktayı hedef olarak seçer. Bu robotun bazı durumlardan kurtulmasını sağlar.
+        index = random.randint(0,len(groups)-1)
+        target = groups[index][1]
+        target = target[random.randint(0,len(target)-1)]
+        path = astar(matrix, current, target)
+        targetP = [(p[1]*resolution+originX,p[0]*resolution+originY) for p in path]
+    return targetP
+
+def pathLength(path):
+    for i in range(len(path)):
+        path[i] = (path[i][0],path[i][1])
+        points = np.array(path)
+    differences = np.diff(points, axis=0)
+    distances = np.hypot(differences[:,0], differences[:,1])
+    total_distance = np.sum(distances)
+    return total_distance
+
+def costmap(data,width,height,resolution):
+    data = np.array(data).reshape(height,width)
+    wall = np.where(data == 100)
+    for i in range(-expansion_size,expansion_size+1):
+        for j in range(-expansion_size,expansion_size+1):
+            if i  == 0 and j == 0:
+                continue
+            x = wall[0]+i
+            y = wall[1]+j
+            x = np.clip(x,0,height-1)
+            y = np.clip(y,0,width-1)
+            data[x,y] = 100
+    data = data*resolution
+    return data
+
+def exploration(data,width,height,resolution,column,row,originX,originY):
+        global pathGlobal #Global degisken
+        data = costmap(data,width,height,resolution) #Engelleri genislet
+        data[row][column] = 0 #Robot Anlık Konum
+        data[data > 5] = 1 # 0 olanlar gidilebilir yer, 100 olanlar kesin engel
+        data = frontierB(data) #Sınır noktaları bul
+        data,groups = assign_groups(data) #Sınır noktaları gruplandır
+        groups = fGroups(groups) #Grupları küçükten büyüğe sırala. En buyuk 5 grubu al
+        if len(groups) == 0: #Grup yoksa kesif tamamlandı
+            path = -1
+        else: #Grup varsa en yakın grubu bul
+            data[data < 0] = 1 #-0.05 olanlar bilinmeyen yer. Gidilemez olarak isaretle. 0 = gidilebilir, 1 = gidilemez.
+            path = findClosestGroup(data,groups,(row,column),resolution,originX,originY) #En yakın grubu bul
+            if path != None: #Yol varsa BSpline ile düzelt
+                path = bspline_planning(path,len(path)*5)
+            else:
+                path = -1
+        pathGlobal = path
+        return
+
+def localControl(scan):
+    v = None
+    w = None
+    for i in range(60):
+        if scan[i] < robot_r:
+            v = 0.2
+            w = -math.pi/4 
+            break
+    if v == None:
+        for i in range(300,360):
+            if scan[i] < robot_r:
+                v = 0.2
+                w = math.pi/4
+                break
+    return v,w
 
 class MasterNode(Node):
     def __init__(self, show_plot):
@@ -135,7 +413,7 @@ class MasterNode(Node):
         self.occ_subscription = self.create_subscription(
             OccupancyGrid,
             'map',
-            self.occ_callback,
+            self.odom_callback,
             qos_profile_sensor_data)
         self.occ_subscription  # prevent unused variable warning
         self.occupancyMap = self.dilutedOccupancyMap = self.frontierMap = np.array([])
@@ -156,6 +434,8 @@ class MasterNode(Node):
             self.pos_callback,
             10)
         self.pos_y = self.pos_x = self.yaw = 0
+
+        
 
         ''' ================================================ cmd_linear ================================================ '''
         # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
@@ -273,64 +553,21 @@ class MasterNode(Node):
     def bucketAngle_listener_callback(self, msg):
         self.bucketAngle = msg.data
 
+
     def occ_callback(self, msg):
-        self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
-        self.map_w = msg.info.width
-        self.map_h = msg.info.height
-        self.map_origin_x = msg.info.origin.position.x
-        self.map_origin_y = msg.info.origin.position.y   
+        self.map_data = msg
+        self.resolution = self.map_data.info.resolution
+        self.originX = self.map_data.info.origin.position.x
+        self.originY = self.map_data.info.origin.position.y
+        self.width = self.map_data.info.width
+        self.height = self.map_data.info.height
+        self.data = self.map_data.data
         
-        # this converts the occupancy grid to an 1d array of map, umpapped, occupied
-        occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count', bins=occ_bins)
-
-        # reshape to 2D array 
-        # 1 = unmapped
-        # 2 = mapped and open
-        # 3 = mapped and obstacle
-        self.occupancyMap = np.uint8(binnum.reshape(msg.info.height,msg.info.width))
-        
-        # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
-        # pixelExpend = numbers of pixel to expend by
-        pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))  
-        
-        OPEN = 2
-        OBSTACLE = 3
-        
-        # Create a mask of the OPEN areas
-        open_mask = (self.occupancyMap == OPEN)
-
-        # Create a mask of the OBSTACLE areas
-        obstacle_mask = (self.occupancyMap == OBSTACLE)
-
-        # Create a structuring element for the dilation
-        selem = disk(pixelExpend)
-
-        # Perform the dilation
-        dilated = dilation(obstacle_mask, selem)
-
-        # Apply the dilation only within the OPEN areas
-        self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
-        
-        # this gives the locations of bot in the occupancy map, in pixel
-        self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
-        self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
-        
-        # this gives the locations of magic origin in the occupancy map, in pixel
-        self.magicOriginx_pixel = round((-self.map_origin_x) / self.map_res)
-        self.magicOriginy_pixel = round((-self.map_origin_y) / self.map_res)
-        
-        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
-        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
-        
-        # find frontier points
-        self.frontierSearch()
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
-        self.pos_x = msg.position.x
-        self.pos_y = msg.position.y
+        self.x = msg.position.x
+        self.y = msg.position.y
         # in degrees (not radians)
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         # self.yaw += self.yaw_offset
@@ -384,8 +621,57 @@ class MasterNode(Node):
             switch_msg = String()
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
+
+        elif self.state == "kesif":
+            if isinstance(pathGlobal, int) and pathGlobal == 0:
+                column = int((self.x - self.originX)/self.resolution)
+                row = int((self.y - self.originY)/self.resolution)
+                exploration(self.data, self.width, self.height, self.resolution, column, row, self.originX, self.originY)
+                self.path = pathGlobal
+            else:
+                self.path = pathGlobal
+            if isinstance(self.path, int) and self.path == -1:
+                print("[INFO] EXPLORATION COMPLETED")
+                sys.exit()
+            self.c = int((self.path[-1][0] - self.originX)/self.resolution)
+            self.r = int((self.path[-1][1] - self.originY)/self.resolution)
+            self.state = "kesifFalse"
+            self.i = 0
+            print("[INFO] NEW TARGET SET")
+            t = pathLength(self.path)/speed
+            t = t - 0.2  # Subtract 0.2 seconds from the calculated time based on the formula x = v * t. The exploration function will be called after t seconds.
+            self.t = threading.Timer(t, self.target_callback)  # Calls the exploration function shortly before reaching the target.
+            self.t.start()
+
+        # Start of the Path Tracking Block
+        elif self.state == "kesifFalse":
+            v, w = localControl(self.scan)
+            if v == None:
+                v, w, self.i = pure_pursuit(self.x, self.y, self.yaw, self.path, self.i)
+            if abs(self.x - self.path[-1][0]) < target_error and abs(self.y - self.path[-1][1]) < target_error:
+                v = 0.0
+                w = 0.0
+                self.state = "kesif"
+                print("[INFO] REACHED TARGET")
+                self.t.join()  # Wait until the thread finishes.
+            #twist.linear.x = v
+            #twist.angular.z = w
+
+            deltaAngle_msg = Float64()
+            deltaAngle_msg.data = math.degrees(w)
+            self.deltaAngle_publisher.publish(deltaAngle_msg)
+            #self.publisher.publish(twist)
+            linear_msg = Int8()
+            linear_msg.data = v
+            self.linear_publisher.publish(linear_msg)
+            time.sleep(0.1)
+        # End of the Path Tracking Block
             
-        elif self.state == "maze_rotating":
+        else:
+            pass
+            
+            
+'''     elif self.state == "maze_rotating":
             # self.get_logger().info('current yaw: %f' % self.yaw)
             if self.robotControlNodeState == "rotateStop":
                 # set linear to start moving forward
@@ -754,7 +1040,8 @@ class MasterNode(Node):
                 self.get_logger().info('mode %d does not exist' % mode)
                 
                 
-        ''' ================================================ DEBUG PLOT ================================================ '''        
+        ''' #================================================ DEBUG PLOT ================================================ 
+'''        
         if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
             # Pixel values
             ROBOT = 0
@@ -901,7 +1188,8 @@ class MasterNode(Node):
             res_x.reverse()
             res_y.reverse()
             return res_x, res_y
-        
+
+    #might need to comment out the part below lmao        
     def move_to(self, tx, ty):
         self.get_logger().info('currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
@@ -924,7 +1212,7 @@ class MasterNode(Node):
         # 4 = frontier
         # 5 = frontier point
         
-        ''' ================================================ Frontier Search ================================================ '''      
+        #================================================ Frontier Search ================================================
         # frontier is between 1 = unmapped and 2 = mapped and open
         
         self.frontier = []
@@ -1013,7 +1301,7 @@ class MasterNode(Node):
                 middle_x = sorted(x_coords)[len(x_coords) // 2]
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
 
-                self.frontierPoints.append((middle_x, middle_y))
+                self.frontierPoints.append((middle_x, middle_y))'''
 
 def main(args=None):
     rclpy.init(args=args)
