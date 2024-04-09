@@ -437,7 +437,7 @@ class MasterNode(Node):
                 return
                 
             # check the path for the last point which is the destination set last time
-            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
+            new_dest_x, new_dest_y, _ = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
 
             if len(new_dest_x) == 0:
                 self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
@@ -1205,7 +1205,7 @@ class MasterNode(Node):
 
         if p_pre[ty][tx][opt_k] == (-1, -1, -1):
             self.get_logger().info('[path_finding]: no path from cell (%d %d) to cell (%d %d)' % (sx, sy, tx, ty))
-            return [], []
+            return [], [], 0
 
         self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, opt_d))
 
@@ -1231,11 +1231,11 @@ class MasterNode(Node):
                 res_y.pop(1)
         self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
 
-        return res_x, res_y
+        return res_x, res_y, opt_d
 
     def move_to(self, tx, ty):
         self.get_logger().info('[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
-        self.dest_x, self.dest_y = self.find_path_to(tx, ty)
+        self.dest_x, self.dest_y, _ = self.find_path_to(tx, ty)
 
         if len(self.dest_x) == 0:
             self.get_logger().info('[move_to]: no path found get back to magicState: %s' % self.magicState)
@@ -1345,7 +1345,8 @@ class MasterNode(Node):
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
 
                 # skip if it is not reachable
-                if self.dist[middle_y][middle_x] >= 2e9:
+                _, _, opt_d = self.find_path_to(middle_x, middle_y)
+                if opt_d >= 2e9:
                     self.get_logger().info('[frontierSearch]: point (%d %d) is too far; skipped' % (middle_x, middle_y))
                     continue
 
