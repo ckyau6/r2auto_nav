@@ -33,8 +33,10 @@ occ_bins = [-1, 0, 65, 100]
 CLEARANCE_RADIUS = 10
 
 # this is in pixel
-FRONTIER_THRESHOLD = 4
-PIXEL_DEST_THRES = 2
+# FRONTIER_THRESHOLD = 4
+FRONTIER_THRESHOLD = 2
+# PIXEL_DEST_THRES = 2
+PIXEL_DEST_THRES = 0
 
 NAV_TOO_CLOSE = 0.15
 
@@ -71,7 +73,8 @@ OPEN = 2
 OBSTACLE = 3
 
 # this is for path finder to ignore close points, in pixels
-RADIUS_OF_IGNORE = 3
+# RADIUS_OF_IGNORE = 3
+RADIUS_OF_IGNORE = 1
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -382,13 +385,15 @@ class MasterNode(Node):
 
         PARAMETER_R = 0.90
         # use odd number for window size
-        WINDOWSIZE = 21
+        # WINDOWSIZE = 21
+        WINDOWSIZE = 9
 
         # Define the function to apply over the moving window
         def func(window):
             # Calculate the distances from the center of the grid
             center = WINDOWSIZE // 2
             distances = np.sqrt((np.arange(WINDOWSIZE) - center)**2 + (np.arange(WINDOWSIZE)[:, None] - center)**2).reshape(WINDOWSIZE**2)
+            distances *= 2.5 #TEMP
 
             # Calculate the new pixel value
             new_pixel = np.max(window * PARAMETER_R**distances)
@@ -1220,7 +1225,7 @@ class MasterNode(Node):
             res_y.append(ty)
             if ty == sy and tx == sx:
                 break
-            ty, tx, opt_k = self.pre[ty][tx][opt_k]
+            ty, tx, opt_k = p_pre[ty][tx][opt_k]
         res_x.reverse()
         res_y.reverse()
         if len(res_x) >= 3:
