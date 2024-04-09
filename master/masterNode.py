@@ -891,9 +891,9 @@ class MasterNode(Node):
                     if any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
 
-                        # set linear to be 127 to move forward fastest
+                        # set linear to be self.linear_speed to move forward fastest
                         linear_msg = Int8()
-                        linear_msg.data = 127
+                        linear_msg.data = self.linear_speed
                         self.linear_publisher.publish(linear_msg)
 
 
@@ -903,10 +903,10 @@ class MasterNode(Node):
                         # elif right got something, rotate left
                         # else go straight
                         if all(self.laser_range[self.leftIndexL:self.leftIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = -127
+                            anglularVel_msg.data = -self.linear_speed
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and right')
                         elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = 127
+                            anglularVel_msg.data = self.linear_speed
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and left')
                         else:
                             anglularVel_msg.data = 0
@@ -983,9 +983,9 @@ class MasterNode(Node):
                 self.get_logger().info('[moving_to_bucket]: still rotating, waiting')
                 pass
             else:
-                # set linear to be 127 to move forward fastest
+                # set linear to be self.linear_speed to move forward fastest
                 linear_msg = Int8()
-                linear_msg.data = 127
+                linear_msg.data = self.linear_speed
                 self.linear_publisher.publish(linear_msg)
 
                 # if the bucket is in the to the right, turn left slightly
