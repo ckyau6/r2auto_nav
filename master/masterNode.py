@@ -224,9 +224,6 @@ class MasterNode(Node):
         self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
         
-        self.dijkstra_freq = 1
-        self.dijkstra_stat = 0
-        
         self.path_recalc_freq = 2
         self.path_recalc_stat = 0
 
@@ -405,11 +402,6 @@ class MasterNode(Node):
         self.processedOcc[unmapped_mask] = 100
 
         # self.get_logger().info(str(self.processedOcc == self.oriorimap))
-
-        self.dijkstra_stat += 1
-        self.dijkstra_stat %= self.dijkstra_freq
-        if self.dijkstra_stat == 0 or dimension_changed or self.offset_y != 0 or self.offset_x != 0:
-            self.dijkstra()
 
         # find frontier points
         self.frontierSearch()
@@ -1173,15 +1165,11 @@ class MasterNode(Node):
         else:
             return (71 / (101 - occ_value) - 1) * 1e8 + 1
 
-    def dijkstra(self):
-        dickStarTime = time.time()
-
-        # Dijkstra's algorithm
-        # get grid coordination
+    def find_path_to(self, tx, ty):
         sx = self.botx_pixel
         sy = self.boty_pixel
         p_dist = [[[1e18 for _ in range(4)] for x in range(self.map_w)] for y in range(self.map_h)]
-        p_pre = [[[(-1, -1) for _ in range(4)] for x in range(self.map_w)] for y in range(self.map_h)]
+        p_pre = [[[(-1, -1, -1) for _ in range(4)] for x in range(self.map_w)] for y in range(self.map_h)]
         cur_dir = round(self.yaw / 90) % 4
         p_dist[sy][sx][cur_dir] = 0
         pq = []
@@ -1190,13 +1178,14 @@ class MasterNode(Node):
         dy = [0, 1, 0, -1]
         while pq:
             d, y, x, dir = heapq.heappop(pq)
-            # self.get_logger().info('[dijkstra]: d: %f, y: %d, x: %d, dir: %d' % (d, y, x, dir))
+            if y == ty and x == tx:
+                break
             if d > p_dist[y][x][dir]:
                 continue
             for k in range(4):
                 r = (k - dir) % 4
                 r = min(r, 4 - r)
-                nd = d + 5 * self.cost_function(self.processedOcc[y][x]) * r # for taking rotation time into account, magical constant
+                nd = d + 5 * self.cost_function(self.processedOcc[y][x]) * r
                 if p_dist[y][x][k] > nd:
                     p_dist[y][x][k] = nd
                     p_pre[y][x][k] = p_pre[y][x][dir]
@@ -1208,29 +1197,17 @@ class MasterNode(Node):
             nd = d + self.cost_function(self.processedOcc[ny][nx])
             if p_dist[ny][nx][dir] > nd:
                 p_dist[ny][nx][dir] = nd
-                p_pre[ny][nx][dir] = (y, x)
+                p_pre[ny][nx][dir] = (y, x, dir)
                 heapq.heappush(pq, (nd, ny, nx, dir))
 
-        timeTaken = time.time() - dickStarTime
-        self.get_logger().info('[dijkstra]: it took: %f' % timeTaken)
-        self.dist = [[1e18 for x in range(self.map_w)] for y in range(self.map_h)]
-        self.pre = [[(-1, -1) for x in range(self.map_w)] for y in range(self.map_h)]
-        for y in range(self.map_h):
-            for x in range(self.map_w):
-                opt_k = np.argmin(p_dist[y][x])
-                self.dist[y][x] = p_dist[y][x][opt_k]
-                self.pre[y][x] = p_pre[y][x][opt_k]
-                    
-        
-    def find_path_to(self, tx, ty):
-        sx = self.botx_pixel
-        sy = self.boty_pixel
+        opt_k = np.argmin(p_dist[ty][tx])
+        opt_d = p_dist[ty][tx][opt_k]
 
-        if self.pre[ty][tx] == (-1, -1):
+        if p_pre[ty][tx][opt_k] == (-1, -1, -1):
             self.get_logger().info('[path_finding]: no path from cell (%d %d) to cell (%d %d)' % (sx, sy, tx, ty))
             return [], []
 
-        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, self.dist[ty][tx]))
+        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, opt_d))
 
         res_x = []
         res_y = []
@@ -1243,7 +1220,7 @@ class MasterNode(Node):
             res_y.append(ty)
             if ty == sy and tx == sx:
                 break
-            ty, tx = self.pre[ty][tx]
+            ty, tx, opt_k = self.pre[ty][tx][opt_k]
         res_x.reverse()
         res_y.reverse()
         if len(res_x) >= 3:
