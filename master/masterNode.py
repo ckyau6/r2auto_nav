@@ -34,7 +34,7 @@ CLEARANCE_RADIUS = 10
 FRONTIER_THRESHOLD = 4
 PIXEL_DEST_THRES = 2
 
-NAV_TOO_CLOSE = 0.30
+NAV_TOO_CLOSE = 0.18
 
 BUCKET_TOO_CLOSE = 0.35
 
@@ -52,7 +52,7 @@ BACK_ANGLE_RANGE = 5
 BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
 BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
 
-MAZE_FRONT_RANGE = 20
+MAZE_FRONT_RANGE = 45
 MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
 MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 
@@ -579,7 +579,36 @@ class MasterNode(Node):
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
             
-            self.recalc_stat += 1
+            # if obstacle in front and close to both sides, rotate to move beteween the two
+            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
+                
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                # get rid of point that is too close to wall in the first place and take the next one
+                # cannot take final one if its like thru a wall
+                self.dest_x = self.dest_x[1:]
+                self.dest_y = self.dest_y[1:]
+                
+                if len(self.dest_x) == 0:
+                    self.get_logger().info('[maze_moving]: no more destination; get back to magicState: %s' % self.magicState)
+                    self.state = self.magicState
+                else:
+                    self.get_logger().warn('[maze_moving]: moving to next point')
+                    self.move_straight_to(self.dest_x[0], self.dest_y[0])
+                return
+                
+            else:
+                # else just increment counter for re orient 
+                self.recalc_stat += 1
             
             # recalculate target angle if reach recalc_freq
             # this takes care both for obstacles and re aiming to target coords
