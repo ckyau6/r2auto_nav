@@ -372,8 +372,8 @@ class MasterNode(Node):
         # self.get_logger().info('Unique values in oriorimap: %s' % unique_values)
 
         PARAMETER_R = 0.9
-        # use odd number for window size
-        WINDOWSIZE = 13
+        # use odd number for window size, in pixel
+        WINDOWSIZE = 19
 
         # Define the function to apply over the moving window
         def func(window):
@@ -500,7 +500,7 @@ class MasterNode(Node):
             if self.magicState == "frontier_search" and self.frontierPoints == []:
                 self.get_logger().info('[masterFSM]: no more frontier points go to move_to_hallway')
                 self.state = self.magicState = "move_to_hallway"
-
+                
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
             servoAngle_msg = UInt8()
@@ -527,10 +527,17 @@ class MasterNode(Node):
             self.get_logger().info('[maze_rotating]: rotating')
 
             if self.robotControlNodeState == "rotateStop":
+                time.sleep(1)
+                
                 # set linear to start moving forward
                 linear_msg = Int8()
                 linear_msg.data = self.linear_speed
                 self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
 
                 self.state = "maze_moving"
 
@@ -564,6 +571,8 @@ class MasterNode(Node):
                 return
 
             self.recalc_stat += 1
+            
+            
 
             # recalculate target angle if reach recalc_freq
             # this takes care both for obstacles and re aiming to target coords
@@ -1030,17 +1039,54 @@ class MasterNode(Node):
                 self.totalMap = self.processedOcc.copy()
                 
                 # Normalize the array to the range 0-255
-                totalMap_normalized = ((self.totalMap - self.totalMap.min()) * (255 - 0) / (self.totalMap.max() - self.totalMap.min())).astype(np.uint8)
+                totalMap_normalized = ((self.totalMap - 0) * (255 - 0) / (100 - 0)).astype(np.uint8)
 
                 # Convert the normalized array to integers
                 totalMap_int = totalMap_normalized.astype(np.uint8)
 
+                # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
+                TARGET_SIZE_M = 5
+                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
+
+                # Calculate the necessary padding
+                padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
+                padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+
+                # Define the number of pixels to add to the height and width
+                padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+                padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+
+                # Pad the image
+                totalMap_rgb = np.pad(totalMap_int, pad_width=(padding_height, padding_width), mode='constant', constant_values=0)
+
                 # Convert the single-channel grayscale image to a three-channel RGB image
-                totalMap_rgb = cv2.cvtColor(totalMap_int, cv2.COLOR_GRAY2BGR)
+                totalMap_rgb = cv2.cvtColor(totalMap_rgb, cv2.COLOR_GRAY2BGR)
                 
+                try:
+                    # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
+                    totalMap_rgb[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = (50, 205, 50)
+                    totalMap_rgb[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = (50, 205, 50)
+
+                    totalMap_rgb[self.finishLine_Ypixel, :] = (50, 205, 50)
+                except:
+                    self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
+                    
                 # Set the value for the path planning points
                 for i in range(len(self.dest_x)):
-                    totalMap_rgb[self.dest_y[i]][self.dest_x[i]] = (0, 255, 0)
+                    totalMap_rgb[self.dest_y[i]][self.dest_x[i]] = (255, 165, 0)
+                    
+                # Set the value of the frontier and the frontier points
+                for pixel in self.frontier:
+                    totalMap_rgb[pixel[0]][pixel[1]] = (0, 255, 255)
+
+                for pixel in self.frontierPoints:
+                    totalMap_rgb[pixel[1]][pixel[0]] = (255, 0, 255)
+                    
+                # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+                totalMap_rgb[self.boty_pixel][self.botx_pixel] = (255, 0, 0)
+
+                # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
+                totalMap_rgb[self.magicOriginy_pixel][self.magicOriginx_pixel] = (255, 255, 0)
 
                 # Display the image using matplotlib.pyplot
                 plt.imshow(cv2.cvtColor(totalMap_rgb, cv2.COLOR_BGR2RGB), origin='lower')
@@ -1065,6 +1111,14 @@ class MasterNode(Node):
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
         self.get_logger().info('[move_straight_to]: currently at (%d %d) with yaw %f, moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, self.yaw, tx, ty))
+        
+        # set linear to be zero
+        linear_msg = Int8()
+        linear_msg.data = 0
+        self.linear_publisher.publish(linear_msg)
+        
+        time.sleep(1)
+            
         # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
         deltaAngle = Float64()
         deltaAngle.data = target_yaw - self.yaw
