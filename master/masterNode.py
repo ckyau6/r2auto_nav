@@ -36,7 +36,7 @@ CLEARANCE_RADIUS = 10
 FRONTIER_THRESHOLD = 4
 PIXEL_DEST_THRES = 2
 
-NAV_TOO_CLOSE = 0.30
+NAV_TOO_CLOSE = 0.15
 
 BUCKET_TOO_CLOSE = 0.35
 
@@ -191,6 +191,10 @@ class MasterNode(Node):
             'robotControlNode_state_feedback',
             self.robotControlNode_state_feedback_callback,
             10)
+        
+        ''' ================================================ boolCurve ================================================ '''
+        # Create a publisher to the topic "boolCurve", which can changing bool for curve the robot
+        self.boolCurve_publisher = self.create_publisher(Int8, 'boolCurve', 10)
 
         ''' ================================================ Master FSM ================================================ '''
         self.state = "idle"
@@ -219,6 +223,12 @@ class MasterNode(Node):
         # self.yaw_offset = 0
         self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
+        
+        self.dijkstra_freq = 1
+        self.dijkstra_stat = 0
+        
+        self.path_recalc_freq = 2
+        self.path_recalc_stat = 0
 
         self.dest_x = []
         self.dest_y = []
@@ -304,6 +314,8 @@ class MasterNode(Node):
     def occ_callback(self, msg):
         occTime = time.time()
         self.get_logger().info('[occ_callback]: new occ map!')
+        
+        dimension_changed = (self.map_w != msg.info.width or self.map_h != msg.info.height)
 
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
         self.map_w = msg.info.width
@@ -371,9 +383,9 @@ class MasterNode(Node):
         # unique_values = np.unique(self.oriorimap)
         # self.get_logger().info('Unique values in oriorimap: %s' % unique_values)
 
-        PARAMETER_R = 0.9
+        PARAMETER_R = 0.90
         # use odd number for window size
-        WINDOWSIZE = 13
+        WINDOWSIZE = 21
 
         # Define the function to apply over the moving window
         def func(window):
@@ -394,13 +406,44 @@ class MasterNode(Node):
 
         # self.get_logger().info(str(self.processedOcc == self.oriorimap))
 
-        # run dijkstra before any call to path_finding
-        self.dijkstra()
+        self.dijkstra_stat += 1
+        self.dijkstra_stat %= self.dijkstra_freq
+        if self.dijkstra_stat == 0 or dimension_changed or self.offset_y != 0 or self.offset_x != 0:
+            self.dijkstra()
 
         # find frontier points
         self.frontierSearch()
-
+        
+        self.path_recalc_stat += 1
+        self.path_recalc_stat %= self.path_recalc_freq
         if len(self.dest_x) > 0:
+            if self.magicState == "frontier_search" and (self.dest_y[-1] + self.offset_y, self.dest_x[-1] + self.offset_x) not in self.frontier:
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                self.dest_x = []
+                self.dest_y = []
+
+                self.get_logger().info('[occ_callback]: designation is already mapped; get back to frontier_search')
+                
+                self.state = self.magicState
+                
+                timeTaken = time.time() - occTime
+                self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+                return
+
+            if self.path_recalc_stat != 0:
+                timeTaken = time.time() - occTime
+                self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+                return
+                
             # check the path for the last point which is the destination set last time
             new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
 
@@ -454,6 +497,12 @@ class MasterNode(Node):
             self.state = self.magicState = "frontier_search"
         elif msg.data == "idle":
             self.state = self.magicState = "idle"
+        elif msg.data == "checking_walls_distance":
+            self.state = self.magicState = "checking_walls_distance"
+            # set boolCurve to 1, to be place in the state before checking_walls_distance
+            boolCurve_msg = Int8()
+            boolCurve_msg.data = 1
+            self.boolCurve_publisher.publish(boolCurve_msg)
         else:
             mode, tx, ty = map(int, self.state.split())
             if mode == 0:
@@ -521,6 +570,11 @@ class MasterNode(Node):
             switch_msg = String()
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
+            
+            # set boolCurve to 0
+            boolCurve_msg = Int8()
+            boolCurve_msg.data = 0
+            self.boolCurve_publisher.publish(boolCurve_msg)
 
         elif self.state == "maze_rotating":
             # self.get_logger().info('current yaw: %f' % self.yaw)
@@ -572,48 +626,89 @@ class MasterNode(Node):
 
                 self.recalc_stat = 0
 
-                # # if obstacle in front and close to both sides, rotate to move beteween the two
-                # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                # if obstacle in front and close to both sides, rotate to move beteween the two
+                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
 
-                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                #     minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
-                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
+                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
+                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
 
-                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                #     minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + MAZE_FRONT_RIGHT_ANGLE
-                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + MAZE_FRONT_RIGHT_ANGLE
+                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
 
-                #     # target angle will be in between the two angles
-                #     targetAngle = (minAngleleft + minAngleRight) / 2
-                #     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
+                    # target angle will be in between the two angles
+                    targetAngle = (minAngleleft + minAngleRight) / 2
+                    deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
 
-                #     self.get_logger().info('[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (minAngleleft, minAngleRight, deltaAngle))
+                    self.get_logger().warn('[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (minAngleleft, minAngleRight, deltaAngle))
 
-                # # else if obstacle in front and close to left, rotate right
-                # elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
+                # else if obstacle in front and close to left, rotate right
+                elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
 
-                #     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                #     minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
-                #     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
+                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
+                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
 
-                #     # target angle is the angle such that obstacle is no longer in the range of left
-                #     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
-                #     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
+                    # target angle is the angle such that obstacle is no longer in the range of left# if obstacle in front and close to both sides, rotate to move beteween the two
+                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
 
-                #     self.get_logger().info('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (minAngleleft, deltaAngle))
+                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
+                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
 
-                # # else if obstacle in front and close to right, rotate left
-                # elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + MAZE_FRONT_RIGHT_ANGLE
+                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
 
-                #     # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                #     minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + self.mazeFrontRightindex
-                #     minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+                    # target angle will be in between the two angles
+                    targetAngle = (minAngleleft + minAngleRight) / 2
+                    deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
 
-                #     # target angle is the angle such that obstacle is no longer in the range of left
-                #     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
-                #     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
+                    self.get_logger().info('[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (minAngleleft, minAngleRight, deltaAngle))
 
-                #     self.get_logger().info('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (minAngleRight, deltaAngle))
+                # else if obstacle in front and close to left, rotate right
+                elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
+
+                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
+                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
+                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
+
+                    # target angle is the angle such that obstacle is no longer in the range of left
+                    # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
+                    deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
+
+                    self.get_logger().info('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (minAngleleft, deltaAngle))
+
+                # else if obstacle in front and close to right, rotate left
+                elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+
+                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + self.mazeFrontRightindex
+                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+
+                    # target angle is the angle such that obstacle is no longer in the range of left
+                    # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
+                    deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
+
+                    self.get_logger().info('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (minAngleRight, deltaAngle))
+                    # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
+                    deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
+
+                    self.get_logger().warn('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (minAngleleft, deltaAngle))
+
+                # else if obstacle in front and close to right, rotate left
+                elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+
+                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
+                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + self.mazeFrontRightindex
+                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
+
+                    # target angle is the angle such that obstacle is no longer in the range of left
+                    # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
+                    deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
+
+                    self.get_logger().warn('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (minAngleRight, deltaAngle))
 
                 # # else recalculate target angle for next way point
                 # else:
@@ -781,7 +876,7 @@ class MasterNode(Node):
                 # move until the back is more than 40 cm or stop if the front is less than 30 cm
                 # 40cm must be more than the 30cm from smallest distance, so that it wont rotate and get diff distance, lidar is not the center of rotation
                 # must use any not all incase of NaN
-                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketfFrontRightIndex:] < BUCKET_TOO_CLOSE):
+                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE):
                     # infront got something
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
 
@@ -1101,7 +1196,7 @@ class MasterNode(Node):
             for k in range(4):
                 r = (k - dir) % 4
                 r = min(r, 4 - r)
-                nd = d + 5 * r # for taking rotation time into account, magical constant
+                nd = d + 5 * self.cost_function(self.processedOcc[y][x]) * r # for taking rotation time into account, magical constant
                 if p_dist[y][x][k] > nd:
                     p_dist[y][x][k] = nd
                     p_pre[y][x][k] = p_pre[y][x][dir]
@@ -1273,8 +1368,8 @@ class MasterNode(Node):
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
 
                 # skip if it is not reachable
-                self.get_logger().info('[frontierSearch]: checking if frontier is recheable')
-                if len(self.find_path_to(middle_x, middle_y)[0]) == 0:
+                if self.dist[middle_y][middle_x] >= 2e9:
+                    self.get_logger().info('[frontierSearch]: point (%d %d) is too far; skipped' % (middle_x, middle_y))
                     continue
 
                 self.frontierPoints.append((middle_x, middle_y))

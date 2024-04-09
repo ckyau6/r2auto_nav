@@ -46,6 +46,8 @@ class RobotControlNode(Node):
         self.targetAngle = 0
         self.currentYaw = 0
         
+        self.curveState = 0
+        
         ''' ================================================ robotControlNode_state_feedback ================================================ '''
         # Create a publisher for robotControlNode_state_feedback
         self.publisherFB = self.create_publisher(String, 'robotControlNode_state_feedback', 10)
@@ -92,6 +94,15 @@ class RobotControlNode(Node):
             'cmd_deltaAngle',
             self.deltaAngle_callback,
             10)
+        
+        ''' ================================================ boolCurve ================================================ '''
+        # Create a subscriber to the topic "boolCurve"
+        # boolCurve is a Int8, 0 is false, 1 is true
+        self.angle_subscription = self.create_subscription(
+            Int8,
+            'boolCurve',
+            self.boolCurve_callback,
+            10)
 
         self.get_logger().info("robotControlNode has started! :D")
 
@@ -111,6 +122,10 @@ class RobotControlNode(Node):
             self.linearVel = (msg.data / 127.0) * max_linear_speed
             self.get_logger().info("linear_callback: with msg %d and speed: %f" % (msg.data, self.linearVel))  
             
+            # to stop curving
+            if self.curveState == 0:
+                self.state = "rotateStop"
+            
     def anglularVel_callback(self, msg):
         # -1 to -127    ==> 0% to -100% of the maximum speed, -ve is clockwise
         # 0             ==> stop
@@ -125,6 +140,10 @@ class RobotControlNode(Node):
             
             # discard anything from deltaAngle_callback
             self.targetYaw = self.currentYaw
+            
+            # to stop curving
+            if self.curveState == 0:
+                self.state = "rotateStop"
 
     def deltaAngle_callback(self, msg): 
         # Create a subscriber to the topic "cmd_deltaAngle"
@@ -158,6 +177,18 @@ class RobotControlNode(Node):
             
             # discard anything from anglularVel_callback
             self.angleVel = 0.0
+            
+            # to stop curving
+            if self.curveState == 0:
+                self.state = "rotateStop"
+            
+    def boolCurve_callback(self, msg):
+        if msg.data == 0:
+            self.curveState = 0
+        else:
+            self.curveState = 1
+            
+        self.get_logger().info("boolCurve_callback: %d" % self.curveState)
             
     def rotatebot(self):
         if self.state == "rotateStop":
