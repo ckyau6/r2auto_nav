@@ -331,6 +331,7 @@ class navigationControl(Node):
         #self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
         self.subscription = self.create_subscription(Pose,'position',self.pos_callback,10)
         self.y = self.x = self.yaw = 0
+        self.originX = self.originY = 0
         self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,10)
 
         ''' ================================================ cmd_linear ================================================ '''
@@ -352,7 +353,7 @@ class navigationControl(Node):
     def exp(self):
 
         while True: #Sensor verileri gelene kadar bekle.
-            if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
+            if not hasattr(self,'map_data') or not hasattr(self,'pos_data') or not hasattr(self,'scan_data'):
                 time.sleep(0.1)
                 continue
             if self.kesif == True:
@@ -392,6 +393,7 @@ class navigationControl(Node):
                 deltaAngle_msg.data = math.degrees(w)
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 linear_msg = Int8()
+                v = int(v*128/0.22)
                 linear_msg.data = v
                 self.linear_publisher.publish(linear_msg)
 
@@ -415,6 +417,7 @@ class navigationControl(Node):
         self.data = self.map_data.data
 
     def pos_callback(self, msg):
+        self.pos_data = msg
         # Note: those values are different from the values obtained from odom
         self.x = msg.position.x
         self.y = msg.position.y
