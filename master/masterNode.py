@@ -43,7 +43,7 @@ PIXEL_DEST_THRES = 0
 
 NAV_TOO_CLOSE = 0.20
 
-BUCKET_TOO_CLOSE = 0.35
+BUCKET_TOO_CLOSE = 0.30
 
 BUCKET_FRONT_RANGE = 10
 BUCKET_FRONT_LEFT_ANGLE = 0 + BUCKET_FRONT_RANGE
@@ -87,8 +87,6 @@ WINDOWSIZE = 9
 # if distance is more than this value, skip that point
 FRONTIER_SKIP_THRESHOLD = 2e8
 
-# in s
-DOOR_ENTER_TIME = 5
 
 
 # return the rotation angle around z axis in degrees (counterclockwise)
@@ -362,9 +360,9 @@ class MasterNode(Node):
         self.magicOriginy_pixel += self.offset_y
 
         # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
-        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res), round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res))
+        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+        self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
 
         # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
         #
@@ -970,10 +968,10 @@ class MasterNode(Node):
             self.magicState = "enter_to_right_door"
             
         elif self.state == "enter_to_left_door":
-            # move forward until DOOR_ENTER_TIME
-            startTime = time.time()
-            while time.time() - startTime < DOOR_ENTER_TIME:
-                # set linear to be 127 to move forward fastest
+            # move forward until front is within BUCKET_TOO_CLOSE
+            if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
+                
+                # move forwad
                 linear_msg = Int8()
                 linear_msg.data = self.linear_speed
                 self.linear_publisher.publish(linear_msg)
@@ -981,24 +979,35 @@ class MasterNode(Node):
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
-            
-            # set magicState to start bucket task after moving in to room
-            self.state = self.magicState = "checking_walls_distance"
-            
-            # set boolCurve to 1, to be place in the state before checking_walls_distance
-            boolCurve_msg = Int8()
-            boolCurve_msg.data = 1
-            self.boolCurve_publisher.publish(boolCurve_msg)
-            
-            # # temp
-            # self.state = self.magicState = "idle"
+                self.deltaAngle_publisher.publish(deltaAngle_msg)       
+                
+            else:
+                # move forwad
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)       
+                
+                # set magicState to start bucket task after moving in to room
+                self.state = self.magicState = "checking_walls_distance"
+                
+                # set boolCurve to 1, to be place in the state before checking_walls_distance
+                boolCurve_msg = Int8()
+                boolCurve_msg.data = 1
+                self.boolCurve_publisher.publish(boolCurve_msg)
+                
+                # # temp
+                # self.state = self.magicState = "idle"
             
         elif self.state == "enter_to_right_door":
-            # move forward until DOOR_ENTER_TIME
-            startTime = time.time()
-            while time.time() - startTime < DOOR_ENTER_TIME:
-                # set linear to be 127 to move forward fastest
+            # move forward until front is within BUCKET_TOO_CLOSE
+            if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
+                
+                # move forwad
                 linear_msg = Int8()
                 linear_msg.data = self.linear_speed
                 self.linear_publisher.publish(linear_msg)
@@ -1006,18 +1015,29 @@ class MasterNode(Node):
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                self.deltaAngle_publisher.publish(deltaAngle_msg)       
             
-            # set magicState to start bucket task after moving in to room
-            self.state = self.magicState = "checking_walls_distance"
-            
-            # set boolCurve to 1, to be place in the state before checking_walls_distance
-            boolCurve_msg = Int8()
-            boolCurve_msg.data = 1
-            self.boolCurve_publisher.publish(boolCurve_msg)
-            
-            # # temp
-            # self.state = self.magicState = "idle"
+            else:
+                # move forwad
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)   
+                
+                # set magicState to start bucket task after moving in to room
+                self.state = self.magicState = "checking_walls_distance"
+                
+                # set boolCurve to 1, to be place in the state before checking_walls_distance
+                boolCurve_msg = Int8()
+                boolCurve_msg.data = 1
+                self.boolCurve_publisher.publish(boolCurve_msg)
+                
+                # # temp
+                # self.state = self.magicState = "idle"
 
         elif self.state == "checking_walls_distance":
             # lidar minimum is 12 cm send by node, datasheet says 16 cm
