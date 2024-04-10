@@ -34,7 +34,7 @@ CLEARANCE_RADIUS = 10
 FRONTIER_THRESHOLD = 4
 PIXEL_DEST_THRES = 2
 
-NAV_TOO_CLOSE = 0.18
+NAV_TOO_CLOSE = 0.25
 
 BUCKET_TOO_CLOSE = 0.35
 
@@ -52,12 +52,21 @@ BACK_ANGLE_RANGE = 5
 BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
 BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
 
-MAZE_FRONT_RANGE = 45
-MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
-MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
+MAZE_FRONT_BACK_RANGE = 45
+MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_BACK_RANGE
+MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_BACK_RANGE
+MAZE_BACK_LEFT_ANGLE = 180 - MAZE_FRONT_BACK_RANGE
+MAZE_BACK_RIGHT_ANGLE = 180 + MAZE_FRONT_BACK_RANGE
 
 MAZE_CLEARANCE_ANGLE = 10
 MAZE_ROTATE_SPEED = 64
+
+# Naive frontier in deg and meters
+NAIVE_ANGLE_THRESHOLD = 30
+NAIVE_ANGLE_CLOSE_ENUF = 2
+NAIVE_DIST_THRESHOLD = NAV_TOO_CLOSE
+
+NAIVE_STOP_DIST = NAV_TOO_CLOSE - 0.10
 
 # left, right door and finish line coords in meters from the magic origin
 LEFT_DOOR_COORDS_M = (1.20, 2.70)
@@ -284,6 +293,7 @@ class MasterNode(Node):
         self.range_len = len(self.laser_range)
         # self.get_logger().info(str(self.laser_range))
 
+        ''' bucket stuff'''
         self.bucketFrontLeftIndex = self.angle_to_index(BUCKET_FRONT_LEFT_ANGLE, self.range_len)
         self.bucketFrontRightIndex = self.angle_to_index(BUCKET_FRONT_RIGHT_ANGLE, self.range_len)
 
@@ -296,8 +306,12 @@ class MasterNode(Node):
         self.backIndexL = self.angle_to_index(BACK_LOWER_ANGLE, self.range_len)
         self.backIndexH = self.angle_to_index(BACK_UPPER_ANGLE, self.range_len)
         
+        ''' maze stuff'''
         self.mazeFrontLeftindex = self.angle_to_index(MAZE_FRONT_LEFT_ANGLE, self.range_len)
         self.mazeFrontRightindex = self.angle_to_index(MAZE_FRONT_RIGHT_ANGLE, self.range_len)
+        
+        self.mazeBackLeftindex = self.angle_to_index(MAZE_BACK_LEFT_ANGLE, self.range_len)
+        self.mazeBackRightindex = self.angle_to_index(MAZE_BACK_RIGHT_ANGLE, self.range_len)
         
     def bucketAngle_listener_callback(self, msg):
         self.bucketAngle = msg.data
@@ -439,6 +453,7 @@ class MasterNode(Node):
         self.pos_x = msg.position.x
         self.pos_y = msg.position.y
         # in degrees (not radians)
+        # -180 < self.yaw <=180
         self.yaw = angle_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
         # self.yaw += self.yaw_offset
         # self.get_logger().info('x y yaw: %f %f %f' % (self.pos_x, self.pos_y, self.yaw))
@@ -451,6 +466,12 @@ class MasterNode(Node):
                           "maze_rotating", 
                           "maze_moving", 
                           "escape_wall_lmao", 
+                          "naive_frontier_finding_point",
+                          "naive_frontier_checking",
+                          "naive_front_rotating_to_frontier",
+                          "naive_front_moving_to_frontier",
+                          "naive_back_rotating_to_frontier",
+                          "naive_back_moving_to_frontier",
                           "frontier_search", 
                           "move_to_hallway", 
                           "http_request", 
@@ -580,7 +601,7 @@ class MasterNode(Node):
                 return
             
             # if obstacle in front and close to both sides, rotate to move beteween the two
-            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
                 self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
                 
                 # set linear to be zero
@@ -717,7 +738,299 @@ class MasterNode(Node):
                 self.state = "maze_moving"
             else:
                 self.move_straight_to(self.dest_x[0], self.dest_y[0])
+                
+        elif self.state == "naive_frontier_finding_point":
+            # choose a frontier to move to
+            self.naiveDest = self.frontierPoints[0]
+            self.get_logger().info('[naive_frontier_finding_point]: chosen (%d, %d)' % (self.naiveDest[0], self.naiveDest[1]))
+            
+            self.state = "naive_frontier_checking"
+            
+        elif self.state == "naive_frontier_checking":
+            # get the angle to the frontier point in deg, 
+            target_yaw = math.atan2(self.naiveDest[1] - self.boty_pixel, self.naiveDest[0] - self.botx_pixel) * (180 / math.pi)
+            
+            # -180 < target_yaw <=180, -180 < self.yaw <=180
+            naiveDeltaAngle = target_yaw - self.yaw
+            
+            # get the distance to the frontier point in m
+            naiveDist = math.sqrt((self.naiveDest[0] - self.botx_pixel)**2 + (self.naiveDest[1] - self.boty_pixel)**2) * self.map_res
+            
+            # if frontier is in front
+            if naiveDeltaAngle < 90 and naiveDeltaAngle > -90:
+                # if the angle to be turn is greater than NAIVE_ANGLE_THRESHOLD or the distance to frontier is lower than NAIVE_DIST_THRESHOLD 
+                # then stop and rotate to the angle first 
+                # send to moving to naive_front_rotating_to_frontier which will send to naive_front_moving_to_frontier after rotation
+                if (abs(naiveDeltaAngle) > NAIVE_ANGLE_THRESHOLD):
+                    self.get_logger().info('[naive_frontier_checking]: front naiveDeltaAngle: %f, naiveDist: %f rotate first' % (naiveDeltaAngle, naiveDist))
+                
+                    # set linear to be zero 
+                    linear_msg = Int8()
+                    linear_msg.data = 0
+                    self.linear_publisher.publish(linear_msg)
+                    
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = naiveDeltaAngle
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
 
+                    self.state = "naive_front_rotating_to_frontier"
+                    
+                # if the angle to be turn is within the NAIVE_ANGLE_THRESHOLD and the distance to frontier greater than NAIVE_DIST_THRESHOLD
+                # then can move and rotate at the same time
+                # send to naive_front_moving_to_frontier
+                else:
+                    self.get_logger().info('[naive_frontier_checking]: front naiveDeltaAngle: %f, naiveDist: %f move and rotate' % (naiveDeltaAngle, naiveDist))
+                    self.state = "naive_front_moving_to_frontier"
+                
+            # if frontier is behind
+            else:
+                # adjust delta angle so that it aiming the butt to the frontier
+                # if turning front to the face the frontier is cw, then turn back to face the frontier is acw
+                if naiveDeltaAngle > 0:
+                    naiveDeltaAngle = naiveDeltaAngle - 180
+                else:
+                    naiveDeltaAngle = naiveDeltaAngle + 180
+                    
+                # if the angle to be turn is greater than NAIVE_ANGLE_THRESHOLD or the distance to frontier is lower than NAIVE_DIST_THRESHOLD 
+                # then stop and rotate to the angle first
+                # send to moving to naive_back_rotating_to_frontier which will send to naive_back_moving_to_frontier after rotation
+                if (abs(naiveDeltaAngle) > NAIVE_ANGLE_THRESHOLD):
+                    self.get_logger().info('[naive_frontier_checking]: back naiveDeltaAngle: %f, naiveDist: %f rotate first' % (naiveDeltaAngle, naiveDist))
+                
+                    # set linear to be zero 
+                    linear_msg = Int8()
+                    linear_msg.data = 0
+                    self.linear_publisher.publish(linear_msg)
+                    
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = naiveDeltaAngle
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                    self.state = "naive_back_rotating_to_frontier"
+                
+                # if the angle to be turn is within the NAIVE_ANGLE_THRESHOLD and the distance to frontier greater than NAIVE_DIST_THRESHOLD
+                # then can move and rotate at the same time
+                # send to naive_back_moving_to_frontier
+                else:
+                    self.get_logger().info('[naive_frontier_checking]: back naiveDeltaAngle: %f, naiveDist: %f move and rotate' % (naiveDeltaAngle, naiveDist))
+                    self.state = "naive_back_moving_to_frontier"
+            
+        elif self.state == "naive_front_rotating_to_frontier":
+            # if still rotating wait, else can move forward
+            if self.robotControlNodeState == "rotateByAngle":
+                self.get_logger().info('[naive_front_rotating_to_frontier]: still rotating, waiting')
+                pass
+            else:
+                self.get_logger().info('[naive_front_rotating_to_frontier]: finished rotating')
+                
+                # set linear to start moving forward
+                linear_msg = Int8()
+                linear_msg.data = self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                
+                self.state = "naive_front_moving_to_frontier"
+            
+        elif self.state == "naive_front_moving_to_frontier":
+            # this takes care of:
+            # movement to frontier point, stopping when its there
+            # obstacle avoidance
+            # rotation to aim to point
+            
+            anglularVel_msg = Int8()
+            anglularVel_msg.data = 0
+            linear_msg = Int8()
+            linear_msg.data = self.linear_speed
+            
+            if abs(self.botx_pixel - self.naiveDest[0]) <= PIXEL_DEST_THRES and abs(self.boty_pixel - self.naiveDest[1]) <= PIXEL_DEST_THRES:
+                self.get_logger().info('[naive_front_moving_to_frontier]: reached, going to next frontier')
+                self.state = "naive_frontier_finding_point"
+                
+                anglularVel_msg.data = 0
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                self.anglularVel_publisher.publish(anglularVel_msg)
+                return  
+                
+            frontLeftDist = self.laser_range[:self.mazeFrontLeftindex]
+            frontRightDist = self.laser_range[self.mazeFrontRightindex:]
+            minLeftDist = np.nanmin(frontLeftDist)
+            minRightDist = np.nanmin(frontRightDist)
+            
+            self.get_logger().info('[naive_front_moving_to_frontier]: minLeftDist: %f' % minLeftDist)
+            self.get_logger().info('[naive_front_moving_to_frontier]: minRightDist: %f' % minRightDist)
+            
+            
+            # if obstacle is within NAIVE_STOP_DIST, stop to rotate first
+            if any(frontLeftDist < NAIVE_STOP_DIST) and any(frontRightDist < NAIVE_STOP_DIST):
+                self.get_logger().info('[naive_front_moving_to_frontier]: too close stop first')
+                linear_msg.data = 0
+                
+            # if obstacle in front and close to both sides, rotate to move beteween the two
+            if any(frontLeftDist < NAV_TOO_CLOSE) and any(frontRightDist < NAV_TOO_CLOSE):
+                if minLeftDist > minRightDist:
+                    self.get_logger().info('[naive_front_moving_to_frontier]: wall too close, left is more clear, moving left')
+                    anglularVel_msg.data = 127
+                else:
+                    self.get_logger().info('[naive_front_moving_to_frontier]: wall too close, right is more clear, moving right')
+                    anglularVel_msg.data = -127
+                
+                # # check left or right side is closer to wall
+                # if np.nanmean(self.laser_range[self.leftIndexL:self.leftIndexH]) > np.nanmean(self.laser_range[self.rightIndexL:self.rightIndexH]):
+                #     self.get_logger().info('[naive_front_moving_to_frontier]: wall too close, left is clear, moving left')
+                #     anglularVel_msg.data = 127
+                # else:
+                #     self.get_logger().info('[naive_front_moving_to_frontier]: wall too close, right is clear, moving right')
+                #     anglularVel_msg.data = -127
+            # if obstacle in front and close to left sides, rotate to move right
+            elif any(frontLeftDist < NAV_TOO_CLOSE):
+                self.get_logger().info('[naive_front_moving_to_frontier]: wall too close to front left, moving right')
+                anglularVel_msg.data = -127
+            # if obstacle in front and close to right sides, rotate to move left    
+            elif any(frontRightDist < NAV_TOO_CLOSE):
+                self.get_logger().info('[naive_front_moving_to_frontier]: wall too close to front right, moving left')
+                anglularVel_msg.data = 127
+            # else no onstacle, can aim to point
+            else:
+                # get the angle to the frontier point in deg, 
+                target_yaw = math.atan2(self.naiveDest[1] - self.boty_pixel, self.naiveDest[0] - self.botx_pixel) * (180 / math.pi)
+                
+                # -180 < target_yaw <=180, -180 < self.yaw <=180
+                naiveDeltaAngle = target_yaw - self.yaw
+                
+                # get the distance to the frontier point in m
+                naiveDist = math.sqrt((self.naiveDest[0] - self.botx_pixel)**2 + (self.naiveDest[1] - self.boty_pixel)**2) * self.map_res
+                
+                # check that the angle to aim is not too big
+                # this means no time to curve to it has to stop and pass back to naive_frontier_checking
+                if (abs(naiveDeltaAngle) > NAIVE_ANGLE_THRESHOLD):
+                    self.get_logger().info('[naive_front_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f throw back to naive_frontier_checking' % (naiveDeltaAngle, naiveDist))
+                    self.state = "naive_frontier_checking"
+                    return  
+                else:
+                    if abs(naiveDeltaAngle) < NAIVE_ANGLE_CLOSE_ENUF:
+                        self.get_logger().info('[naive_front_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f close enuf and moving' % (naiveDeltaAngle, naiveDist))
+                        anglularVel_msg.data = 0
+                    elif naiveDeltaAngle > 0:
+                        self.get_logger().info('[naive_front_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f aiming to left and moving' % (naiveDeltaAngle, naiveDist))
+                        anglularVel_msg.data = 127
+                    else:
+                        self.get_logger().info('[naive_front_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f aiming to right and moving' % (naiveDeltaAngle, naiveDist))
+                        anglularVel_msg.data = -127
+                        
+            self.linear_publisher.publish(linear_msg)
+            self.anglularVel_publisher.publish(anglularVel_msg)
+                        
+        elif self.state == "naive_back_rotating_to_frontier":
+            # if still rotating wait, else can move backward
+            if self.robotControlNodeState == "rotateByAngle":
+                self.get_logger().info('[naive_back_rotating_to_frontier]: still rotating, waiting')
+                pass
+            else:
+                self.get_logger().info('[naive_back_rotating_to_frontier]: finished rotating')
+                
+                # set linear to start moving forward
+                linear_msg = Int8()
+                linear_msg.data = -self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                
+                self.state = "naive_back_moving_to_frontier"
+            
+        elif self.state == "naive_back_moving_to_frontier":
+            # this takes care of:
+            # movement to frontier point, stopping when its there
+            # obstacle avoidance
+            # rotation to aim to point
+            
+            anglularVel_msg = Int8()
+            anglularVel_msg.data = 0
+            linear_msg = Int8()
+            linear_msg.data = -self.linear_speed
+            
+            if abs(self.botx_pixel - self.naiveDest[0]) <= PIXEL_DEST_THRES and abs(self.boty_pixel - self.naiveDest[1]) <= PIXEL_DEST_THRES:
+                self.get_logger().info('[naive_back_moving_to_frontier]: reached, going to next frontier')
+                self.state = "naive_frontier_finding_point"
+                
+                anglularVel_msg.data = 0
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+                self.anglularVel_publisher.publish(anglularVel_msg)
+                return  
+                
+            backLeftDist = self.laser_range[self.mazeBackLeftindex:self.angle_to_index(180, self.range_len)]
+            backRightDist = self.laser_range[self.angle_to_index(180, self.range_len):self.mazeBackRightindex]
+            minLeftDist = np.nanmin(backLeftDist)
+            minRightDist = np.nanmin(backRightDist)
+            
+            self.get_logger().info('[naive_back_moving_to_frontier]: minLeftDist: %f' % minLeftDist)
+            self.get_logger().info('[naive_back_moving_to_frontier]: minRightDist: %f' % minRightDist)
+            
+            # if obstacle is within NAIVE_STOP_DIST, stop to rotate first
+            if any(backLeftDist < NAIVE_STOP_DIST) or any(backRightDist < NAIVE_STOP_DIST):
+                self.get_logger().info('[naive_back_moving_to_frontier]: too close stop first')
+                linear_msg.data = 0
+                
+            # if obstacle in front and close to both sides
+            if any(backLeftDist < NAV_TOO_CLOSE) and any(backRightDist < NAV_TOO_CLOSE):
+                if minLeftDist > minRightDist:
+                    self.get_logger().info('[naive_front_moving_to_frontier]: wall too close, left is more clear, moving right')
+                    anglularVel_msg.data = -127
+                else:
+                    self.get_logger().info('[naive_front_moving_to_frontier]: wall too close, right is more clear, moving left')
+                    anglularVel_msg.data = 127
+                    
+                # # check left or right side is closer to wall
+                # if np.nanmean(self.laser_range[self.leftIndexL:self.leftIndexH]) > np.nanmean(self.laser_range[self.rightIndexL:self.rightIndexH]):
+                #     self.get_logger().info('[naive_back_moving_to_frontier]: wall too close, left is clear, moving right')
+                #     anglularVel_msg.data = -127
+                # else:
+                #     self.get_logger().info('[naive_back_moving_to_frontier]: wall too close, right is clear, moving left')
+                #     anglularVel_msg.data = 127
+            # if obstacle in front and close to left sides, rotate to move right
+            elif any(backLeftDist < NAV_TOO_CLOSE):
+                self.get_logger().info('[naive_back_moving_to_frontier]: wall too close to back left, moving left')
+                anglularVel_msg.data = 127
+            # if obstacle in front and close to right sides, rotate to move left    
+            elif any(backRightDist < NAV_TOO_CLOSE):
+                self.get_logger().info('[naive_back_moving_to_frontier]: wall too close to back right, moving right')
+                anglularVel_msg.data = -127
+            # else no onstacle, can aim to point
+            else:
+                # get the angle to the frontier point in deg, 
+                target_yaw = math.atan2(self.naiveDest[1] - self.boty_pixel, self.naiveDest[0] - self.botx_pixel) * (180 / math.pi)
+                
+                # -180 < target_yaw <=180, -180 < self.yaw <=180
+                naiveDeltaAngle = target_yaw - self.yaw
+                
+                # get the distance to the frontier point in m
+                naiveDist = math.sqrt((self.naiveDest[0] - self.botx_pixel)**2 + (self.naiveDest[1] - self.boty_pixel)**2) * self.map_res
+                
+                # adjust delta angle so that it aiming the butt to the frontier
+                # if turning front to the face the frontier is cw, then turn back to face the frontier is acw
+                if naiveDeltaAngle > 0:
+                    naiveDeltaAngle = naiveDeltaAngle - 180
+                else:
+                    naiveDeltaAngle = naiveDeltaAngle + 180
+                    
+                # check that the angle to aim is not too big 
+                # this means no time to curve to it has to stop and pass back to naive_frontier_checking
+                if (abs(naiveDeltaAngle) > NAIVE_ANGLE_THRESHOLD):
+                    self.get_logger().info('[naive_back_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f throw back to naive_frontier_checking' % (naiveDeltaAngle, naiveDist))
+                    self.state = "naive_frontier_checking"
+                    return  
+                else:
+                    if abs(naiveDeltaAngle) < NAIVE_ANGLE_CLOSE_ENUF:
+                        self.get_logger().info('[naive_back_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f close enuf and moving' % (naiveDeltaAngle, naiveDist))
+                        anglularVel_msg.data = 0
+                    elif naiveDeltaAngle > 0:
+                        self.get_logger().info('[naive_back_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f aiming to left and moving' % (naiveDeltaAngle, naiveDist))
+                        anglularVel_msg.data = 127
+                    else:
+                        self.get_logger().info('[naive_back_moving_to_frontier]: naiveDeltaAngle: %f, naiveDist: %f aiming to right and moving' % (naiveDeltaAngle, naiveDist))
+                        anglularVel_msg.data = -127
+                        
+            self.linear_publisher.publish(linear_msg)
+            self.anglularVel_publisher.publish(anglularVel_msg)
+            
         elif self.state == "frontier_search":
             # # compare two frontier points and judge which we go first
             # # return True if p1 has higher priority than p2
@@ -956,7 +1269,7 @@ class MasterNode(Node):
                         linear_msg = Int8()
                         linear_msg.data = 127
                         self.linear_publisher.publish(linear_msg)
-                    
+
         
                         anglularVel_msg = Int8()
                         
@@ -1396,8 +1709,10 @@ class MasterNode(Node):
                 
                 # skip if it is not reachable
                 # self.get_logger().info('[frontierSearch]: checking if frontier is recheable')
-                if len(self.find_path_to(middle_x, middle_y)[0]) == 0:
-                    continue
+                
+                # TEMP: to get rid og lag to test naive
+                # if len(self.find_path_to(middle_x, middle_y)[0]) == 0:
+                #     continue
 
                 self.frontierPoints.append((middle_x, middle_y))
                 
