@@ -41,7 +41,7 @@ FRONTIER_THRESHOLD = 2
 # PIXEL_DEST_THRES = 2
 PIXEL_DEST_THRES = 0
 
-NAV_TOO_CLOSE = 0.15
+NAV_TOO_CLOSE = 0.20
 
 BUCKET_TOO_CLOSE = 0.35
 
@@ -59,7 +59,7 @@ BACK_ANGLE_RANGE = 5
 BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
 BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
 
-MAZE_FRONT_RANGE = 20
+MAZE_FRONT_RANGE = 45
 MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
 MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 
@@ -78,6 +78,14 @@ OBSTACLE = 3
 # this is for path finder to ignore close points, in pixels
 # RADIUS_OF_IGNORE = 3
 RADIUS_OF_IGNORE = 1
+
+PARAMETER_R = 0.90
+# use odd number for window size
+# WINDOWSIZE = 21
+WINDOWSIZE = 9
+
+# if distance is more than this value, skip that point
+FRONTIER_SKIP_THRESHOLD = 2e9
 
 
 # return the rotation angle around z axis in degrees (counterclockwise)
@@ -402,11 +410,6 @@ class MasterNode(Node):
         # unique_values = np.unique(self.oriorimap)
         # self.get_logger().info('Unique values in oriorimap: %s' % unique_values)
 
-        PARAMETER_R = 0.90
-        # use odd number for window size
-        # WINDOWSIZE = 21
-        WINDOWSIZE = 9
-
         # Define the function to apply over the moving window
         def func(window):
             # Calculate the distances from the center of the grid
@@ -640,7 +643,38 @@ class MasterNode(Node):
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
 
-            self.recalc_stat += 1
+            # if obstacle in front and close to both sides, rotate to move between the two
+            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) or any(
+                    self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
+
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                # get rid of point that is too close to wall in the first place and take the next one
+                # cannot take final one if its like thru a wall
+                self.dest_x = self.dest_x[1:]
+                self.dest_y = self.dest_y[1:]
+
+                if len(self.dest_x) == 0:
+                    self.get_logger().info(
+                        '[maze_moving]: no more destination; get back to magicState: %s' % self.magicState)
+                    self.state = self.magicState
+                else:
+                    self.get_logger().info('[maze_moving]: moving to next point')
+                    self.move_straight_to(self.dest_x[0], self.dest_y[0])
+                return
+
+            else:
+                # else just increment counter for re orient
+                self.recalc_stat += 1
 
             # recalculate target angle if reach recalc_freq
             # this takes care both for obstacles and re aiming to target coords
@@ -649,120 +683,25 @@ class MasterNode(Node):
 
                 self.recalc_stat = 0
 
-                # if obstacle in front and close to both sides, rotate to move beteween the two
-                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(
-                        self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-
-                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
-                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
-
-                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + MAZE_FRONT_RIGHT_ANGLE
-                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
-
-                    # target angle will be in between the two angles
-                    targetAngle = (minAngleleft + minAngleRight) / 2
-                    deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
-
-                    self.get_logger().warn(
-                        '[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (
-                        minAngleleft, minAngleRight, deltaAngle))
-
-                # else if obstacle in front and close to left, rotate right
-                elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
-
-                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
-                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
-
-                    # target angle is the angle such that obstacle is no longer in the range of left# if obstacle in front and close to both sides, rotate to move beteween the two
-                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(
-                        self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-
-                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
-                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
-
-                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + MAZE_FRONT_RIGHT_ANGLE
-                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
-
-                    # target angle will be in between the two angles
-                    targetAngle = (minAngleleft + minAngleRight) / 2
-                    deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
-
-                    self.get_logger().info(
-                        '[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (
-                        minAngleleft, minAngleRight, deltaAngle))
-
-                # else if obstacle in front and close to left, rotate right
-                elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
-
-                    # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
-                    minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
-                    minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
-
-                    # target angle is the angle such that obstacle is no longer in the range of left
-                    # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
-                    deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
-
-                    self.get_logger().info('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (
-                    minAngleleft, deltaAngle))
-
-                # else if obstacle in front and close to right, rotate left
-                elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-
-                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + self.mazeFrontRightindex
-                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
-
-                    # target angle is the angle such that obstacle is no longer in the range of left
-                    # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
-                    deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
-
-                    self.get_logger().info('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (
-                    minAngleRight, deltaAngle))
-                    # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
-                    deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
-
-                    self.get_logger().warn('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (
-                    minAngleleft, deltaAngle))
-
-                # else if obstacle in front and close to right, rotate left
-                elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
-
-                    # find the angle with the shortest distance from MAZE_FRONT_RIGHT_ANGLE to the end
-                    minIndexRight = np.nanargmin(self.laser_range[self.mazeFrontRightindex:]) + self.mazeFrontRightindex
-                    minAngleRight = self.index_to_angle(minIndexRight, self.range_len)
-
-                    # target angle is the angle such that obstacle is no longer in the range of left
-                    # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
-                    deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
-
-                    self.get_logger().warn('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (
-                    minAngleRight, deltaAngle))
-
-                # # else recalculate target angle for next way point
-                # else:
                 target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
-                            180 / math.pi)
+                        180 / math.pi)
 
                 deltaAngle = target_yaw - self.yaw
 
                 self.get_logger().info('[maze_moving]: front open, reallign with deltaAngle: %f' % deltaAngle)
 
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                if deltaAngle != 0:
+                    # set linear to be zero
+                    linear_msg = Int8()
+                    linear_msg.data = 0
+                    self.linear_publisher.publish(linear_msg)
 
-                # set delta angle to rotate to target angle
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = deltaAngle * 1.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    # set delta angle to rotate to target angle
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = deltaAngle * 1.0
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-                self.state = "maze_rotating"
+                    self.state = "maze_rotating"
 
         elif self.state == "escape_wall_lmao":
             # dequeue all bullshit in dest
@@ -1217,7 +1156,7 @@ class MasterNode(Node):
                 for x in range(self.map_w):
                     for d in range(len(self.dx)):
                         for i in [1, -1]:
-                            self.d_data[iter] = 5 * self.d_cost[self.processedOcc[y][x]]
+                            self.d_data[iter] = 5
                             iter += 1
                         ny = y + self.dy[d]
                         nx = x + self.dx[d]
@@ -1236,7 +1175,7 @@ class MasterNode(Node):
                         for i in [1, -1]:
                             row.append(self.toId(y, x, d))
                             col.append(self.toId(y, x, (d + i) % 4))
-                            data.append(5 * self.d_cost[self.processedOcc[y][x]])
+                            data.append(5)
                         ny = y + self.dy[d]
                         nx = x + self.dx[d]
                         if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
@@ -1308,6 +1247,10 @@ class MasterNode(Node):
                 if res_x[-2] == res_x[-1] == tx or res_y[-2] == res_y[-1] == ty:
                     res_x.pop()
                     res_y.pop()
+            if len(res_x) >= 2:
+                if abs(res_x[-1] - tx) + abs(res_y[-1] - ty) <= RADIUS_OF_IGNORE:
+                    res_x.pop()
+                    res_y.pop()
             res_x.append(tx)
             res_y.append(ty)
             if ty == sy and tx == sx:
@@ -1315,12 +1258,7 @@ class MasterNode(Node):
             ty, tx = self.pre[ty][tx]
         res_x.reverse()
         res_y.reverse()
-        if len(res_x) >= 3:
-            d_01 = abs(res_x[1] - res_x[0]) + abs(res_y[1] - res_y[0])
-            # d_12 = abs(res_x[2] - res_x[1]) + abs(res_y[2] - res_y[1])
-            if d_01 <= RADIUS_OF_IGNORE:
-                res_x.pop(1)
-                res_y.pop(1)
+
         self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
 
         return res_x, res_y
@@ -1438,7 +1376,7 @@ class MasterNode(Node):
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
 
                 # skip if it is not reachable
-                if self.dist[middle_y][middle_x] >= 2e9:
+                if self.dist[middle_y][middle_x] >= FRONTIER_SKIP_THRESHOLD:
                     self.get_logger().info('[frontierSearch]: point (%d %d) is too far; skipped' % (middle_x, middle_y))
                     continue
 
