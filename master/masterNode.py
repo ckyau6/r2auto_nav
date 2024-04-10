@@ -28,6 +28,7 @@ import cv2
 
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
+
 occ_bins = [-1, 0, 65, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
@@ -78,11 +79,13 @@ OBSTACLE = 3
 # RADIUS_OF_IGNORE = 3
 RADIUS_OF_IGNORE = 1
 
+
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
     t3 = +2.0 * (w * z + x * y)
     t4 = +1.0 - 2.0 * (y * y + z * z)
     return math.degrees(math.atan2(t3, t4))
+
 
 class MasterNode(Node):
     def __init__(self, show_plot):
@@ -145,7 +148,7 @@ class MasterNode(Node):
             'bucketAngle',
             self.bucketAngle_listener_callback,
             10)
-        self.bucketAngle_subscription  # prevent unused variable warning  
+        self.bucketAngle_subscription  # prevent unused variable warning
 
         self.bucketAngle = 0
 
@@ -166,7 +169,6 @@ class MasterNode(Node):
         self.leftDoor_pixel = (0, 0)
         self.rightDoor_pixel = (0, 0)
         self.finishLine_Ypixel = 0
-
 
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
@@ -204,7 +206,7 @@ class MasterNode(Node):
         ''' ================================================ Master FSM ================================================ '''
         self.state = "idle"
 
-        # used for navigation to jump back to the correct state afterwards, 
+        # used for navigation to jump back to the correct state afterwards,
         # if None then nothing to jump to
         self.magicState = "idle"
 
@@ -228,7 +230,7 @@ class MasterNode(Node):
         # self.yaw_offset = 0
         self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
-        
+
         self.path_recalc_freq = 2
         self.path_recalc_stat = 0
 
@@ -250,6 +252,14 @@ class MasterNode(Node):
 
         self.magicOriginx_pixel = 0
         self.magicOriginy_pixel = 0
+
+        # for dijkstra
+        self.dx = [1, 0, -1, 0]
+        self.dy = [0, 1, 0, -1]
+        self.d_row = []
+        self.d_col = []
+        self.d_data = []
+        self.d_dim = (0, 0)
 
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
@@ -289,7 +299,7 @@ class MasterNode(Node):
         # self.laser_range[self.laser_range > self.range_max] = np.nan
 
         # replace 0's with nan
-        self.laser_range[self.laser_range==0] = np.nan
+        self.laser_range[self.laser_range == 0] = np.nan
 
         # store the len since it changes
         self.range_len = len(self.laser_range)
@@ -317,8 +327,6 @@ class MasterNode(Node):
         occTime = time.time()
         self.get_logger().info('[occ_callback]: new occ map!')
 
-        dimension_changed = (self.map_w != msg.info.width or self.map_h != msg.info.height)
-
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
         self.map_w = msg.info.width
         self.map_h = msg.info.height
@@ -336,8 +344,10 @@ class MasterNode(Node):
         self.magicOriginy_pixel += self.offset_y
 
         # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
-        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
-        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res), round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res),
+                               round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
+        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res),
+                                round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res))
         self.finishLine_Ypixel = round((FINISH_LINE_M - self.map_origin_y) / self.map_res)
 
         # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
@@ -394,11 +404,13 @@ class MasterNode(Node):
         def func(window):
             # Calculate the distances from the center of the grid
             center = WINDOWSIZE // 2
-            distances = np.sqrt((np.arange(WINDOWSIZE) - center)**2 + (np.arange(WINDOWSIZE)[:, None] - center)**2).reshape(WINDOWSIZE**2)
-            distances *= 2.5 #TEMP
+            distances = np.sqrt(
+                (np.arange(WINDOWSIZE) - center) ** 2 + (np.arange(WINDOWSIZE)[:, None] - center) ** 2).reshape(
+                WINDOWSIZE ** 2)
+            distances *= 2.5  # TEMP
 
             # Calculate the new pixel value
-            new_pixel = np.max(window * PARAMETER_R**distances)
+            new_pixel = np.max(window * PARAMETER_R ** distances)
 
             return new_pixel
 
@@ -418,7 +430,8 @@ class MasterNode(Node):
         self.path_recalc_stat += 1
         self.path_recalc_stat %= self.path_recalc_freq
         if len(self.dest_x) > 0:
-            if self.magicState == "frontier_search" and (self.dest_y[-1] + self.offset_y, self.dest_x[-1] + self.offset_x) not in self.frontier:
+            if self.magicState == "frontier_search" and (
+            self.dest_y[-1] + self.offset_y, self.dest_x[-1] + self.offset_x) not in self.frontier:
                 # set linear to be zero
                 linear_msg = Int8()
                 linear_msg.data = 0
@@ -595,7 +608,8 @@ class MasterNode(Node):
             # if reached the destination (within one pixel), stop and move to the next destination
             self.get_logger().info('[maze_moving]: moving')
 
-            if abs(self.botx_pixel - self.dest_x[0]) <= PIXEL_DEST_THRES and abs(self.boty_pixel - self.dest_y[0]) <= PIXEL_DEST_THRES:
+            if abs(self.botx_pixel - self.dest_x[0]) <= PIXEL_DEST_THRES and abs(
+                    self.boty_pixel - self.dest_y[0]) <= PIXEL_DEST_THRES:
                 # set linear to be zero
                 linear_msg = Int8()
                 linear_msg.data = 0
@@ -612,7 +626,8 @@ class MasterNode(Node):
                 self.dest_y = self.dest_y[1:]
 
                 if len(self.dest_x) == 0:
-                    self.get_logger().info('[maze_moving]: no more destination; get back to magicState: %s' % self.magicState)
+                    self.get_logger().info(
+                        '[maze_moving]: no more destination; get back to magicState: %s' % self.magicState)
                     self.state = self.magicState
                 else:
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
@@ -628,7 +643,8 @@ class MasterNode(Node):
                 self.recalc_stat = 0
 
                 # if obstacle in front and close to both sides, rotate to move beteween the two
-                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(
+                        self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
 
                     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
                     minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
@@ -642,7 +658,9 @@ class MasterNode(Node):
                     targetAngle = (minAngleleft + minAngleRight) / 2
                     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
 
-                    self.get_logger().warn('[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (minAngleleft, minAngleRight, deltaAngle))
+                    self.get_logger().warn(
+                        '[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (
+                        minAngleleft, minAngleRight, deltaAngle))
 
                 # else if obstacle in front and close to left, rotate right
                 elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
@@ -652,7 +670,8 @@ class MasterNode(Node):
                     minAngleleft = self.index_to_angle(minIndexLeft, self.range_len)
 
                     # target angle is the angle such that obstacle is no longer in the range of left# if obstacle in front and close to both sides, rotate to move beteween the two
-                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+                if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) and any(
+                        self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
 
                     # find the angle with the shortest distance from 0 to MAZE_FRONT_LEFT_ANGLE
                     minIndexLeft = np.nanargmin(self.laser_range[:self.mazeFrontLeftindex])
@@ -666,7 +685,9 @@ class MasterNode(Node):
                     targetAngle = (minAngleleft + minAngleRight) / 2
                     deltaAngle = targetAngle if targetAngle < 180 else targetAngle - 360
 
-                    self.get_logger().info('[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (minAngleleft, minAngleRight, deltaAngle))
+                    self.get_logger().info(
+                        '[maze_moving]: both side too close minAngleleft: %f, minAngleRight: %f, deltaAngle: %f' % (
+                        minAngleleft, minAngleRight, deltaAngle))
 
                 # else if obstacle in front and close to left, rotate right
                 elif any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE):
@@ -679,7 +700,8 @@ class MasterNode(Node):
                     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
                     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
 
-                    self.get_logger().info('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (minAngleleft, deltaAngle))
+                    self.get_logger().info('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (
+                    minAngleleft, deltaAngle))
 
                 # else if obstacle in front and close to right, rotate left
                 elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
@@ -692,11 +714,13 @@ class MasterNode(Node):
                     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
                     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
 
-                    self.get_logger().info('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (minAngleRight, deltaAngle))
+                    self.get_logger().info('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (
+                    minAngleRight, deltaAngle))
                     # deltaAngle will be the angle diff - MAZE_CLEARANCE_ANGLE
                     deltaAngle = minAngleleft - MAZE_FRONT_LEFT_ANGLE - MAZE_CLEARANCE_ANGLE
 
-                    self.get_logger().warn('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (minAngleleft, deltaAngle))
+                    self.get_logger().warn('[maze_moving]: left side too close minAngleleft: %f, deltaAngle: %f' % (
+                    minAngleleft, deltaAngle))
 
                 # else if obstacle in front and close to right, rotate left
                 elif any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
@@ -709,14 +733,15 @@ class MasterNode(Node):
                     # deltaAngle will be the angle diff + MAZE_CLEARANCE_ANGLE
                     deltaAngle = MAZE_FRONT_RIGHT_ANGLE - minAngleRight + MAZE_CLEARANCE_ANGLE
 
-                    self.get_logger().warn('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (minAngleRight, deltaAngle))
+                    self.get_logger().warn('[maze_moving]: right side too close minAngleRight: %f, deltaAngle: %f' % (
+                    minAngleRight, deltaAngle))
 
                 # # else recalculate target angle for next way point
                 # else:
-                target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
+                target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
+                            180 / math.pi)
 
                 deltaAngle = target_yaw - self.yaw
-
 
                 self.get_logger().info('[maze_moving]: front open, reallign with deltaAngle: %f' % deltaAngle)
 
@@ -746,11 +771,14 @@ class MasterNode(Node):
             # use move_straight_to instead
             self.dest_x = [free_pixels[1][minIndex]]
             self.dest_y = [free_pixels[0][minIndex]]
-            self.get_logger().info('[escape_wall_lmao]: currently at (%d, %d) moving to nearest free pixel: (%d, %d)' % (self.botx_pixel, self.boty_pixel, self.dest_x[0], self.dest_y[0]))
+            self.get_logger().info(
+                '[escape_wall_lmao]: currently at (%d, %d) moving to nearest free pixel: (%d, %d)' % (
+                self.botx_pixel, self.boty_pixel, self.dest_x[0], self.dest_y[0]))
 
             # if free pixel is behind (90, 270), reverse first
             # else use move_straight_to to move to the free pixel
-            target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (180 / math.pi)
+            target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
+                        180 / math.pi)
             deltaAngle = target_yaw - self.yaw
 
             if deltaAngle > 90 or deltaAngle < -90:
@@ -853,7 +881,7 @@ class MasterNode(Node):
             if min_distance < BUCKET_TOO_CLOSE:
                 self.get_logger().info('[checking_walls_distance]: too close! moving away')
 
-                # set linear to be zero 
+                # set linear to be zero
                 linear_msg = Int8()
                 linear_msg.data = 0
                 self.linear_publisher.publish(linear_msg)
@@ -873,11 +901,12 @@ class MasterNode(Node):
                 self.get_logger().info('[rotating_to_move_away_from_walls]: still rotating, waiting')
                 pass
             else:
-                # get the index of the front left, front right, back, left, right               
+                # get the index of the front left, front right, back, left, right
                 # move until the back is more than 40 cm or stop if the front is less than 30 cm
                 # 40cm must be more than the 30cm from smallest distance, so that it wont rotate and get diff distance, lidar is not the center of rotation
                 # must use any not all incase of NaN
-                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE):
+                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(
+                        self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE):
                     # infront got something
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
 
@@ -904,7 +933,6 @@ class MasterNode(Node):
                         linear_msg = Int8()
                         linear_msg.data = self.linear_speed
                         self.linear_publisher.publish(linear_msg)
-
 
                         anglularVel_msg = Int8()
 
@@ -948,17 +976,17 @@ class MasterNode(Node):
                 self.get_logger().info('[rotating_to_bucket]: rotating to face bucket')
 
                 if self.bucketAngle < 180:
-                    # set linear to be zero 
+                    # set linear to be zero
                     linear_msg = Int8()
                     linear_msg.data = 0
                     self.linear_publisher.publish(linear_msg)
 
                     # set delta angle = bucketAngle
                     deltaAngle_msg = Float64()
-                    deltaAngle_msg.data = self.bucketAngle * 1.0 # to change int to float type
+                    deltaAngle_msg.data = self.bucketAngle * 1.0  # to change int to float type
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
                 elif self.bucketAngle > 180:
-                    # set linear to be zero 
+                    # set linear to be zero
                     linear_msg = Int8()
                     linear_msg.data = 0
                     self.linear_publisher.publish(linear_msg)
@@ -969,14 +997,14 @@ class MasterNode(Node):
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
                 else:
                     # the case where it is 180, turn 90 deg first
-                    # set linear to be zero 
+                    # set linear to be zero
                     linear_msg = Int8()
                     linear_msg.data = 0
                     self.linear_publisher.publish(linear_msg)
 
                     # set delta angle = 90
                     deltaAngle_msg = Float64()
-                    deltaAngle_msg.data =  90.0
+                    deltaAngle_msg.data = 90.0
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
                 # send to moving_to_bucket to wait for rotation to finish
@@ -1028,7 +1056,6 @@ class MasterNode(Node):
         else:
             self.get_logger().error('state %s not defined' % self.state)
 
-
         ''' ================================================ DEBUG PLOT ================================================ '''
         # try:
         if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
@@ -1055,18 +1082,22 @@ class MasterNode(Node):
 
                 # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
                 TARGET_SIZE_M = 5
-                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
+                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0],
+                                    self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_Ypixel)
 
                 # Calculate the necessary padding
                 padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
                 padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
 
                 # Define the number of pixels to add to the height and width
-                padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
-                padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+                padding_height = (
+                0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+                padding_width = (
+                0, padding_width)  # Replace with the number of pixels you want to add to the left and right
 
                 # Pad the image
-                self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
+                self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant',
+                                       constant_values=UNMAPPED)
 
                 try:
                     # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
@@ -1089,23 +1120,23 @@ class MasterNode(Node):
                     self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
 
                 colourList = ['black',
-                              (85/255, 85/255, 85/255),         # dark grey
-                              (170/255, 170/255, 170/255),      # light grey
+                              (85 / 255, 85 / 255, 85 / 255),  # dark grey
+                              (170 / 255, 170 / 255, 170 / 255),  # light grey
                               'white',
-                              (50/255, 205/255, 50/255),        # lime green
-                              (1, 1, 0),                        # yellow
-                              (0, 1, 0)                         # green
+                              (50 / 255, 205 / 255, 50 / 255),  # lime green
+                              (1, 1, 0),  # yellow
+                              (0, 1, 0)  # green
                               ]
 
                 # add in colours for each type of pixel
                 if len(self.frontier) > 0:
-                    colourList.append((0, 1, 1))    # cyan
+                    colourList.append((0, 1, 1))  # cyan
 
                 if len(self.frontierPoints) > 0:
-                    colourList.append((1, 0, 1))    # magenta
+                    colourList.append((1, 0, 1))  # magenta
 
                 if len(self.dest_x) > 0:
-                    colourList.append((1, 165/255, 0))   # orange
+                    colourList.append((1, 165 / 255, 0))  # orange
 
                 # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
                 self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
@@ -1126,7 +1157,8 @@ class MasterNode(Node):
                 self.totalMap = self.processedOcc.copy()
 
                 # Normalize the array to the range 0-255
-                totalMap_normalized = ((self.totalMap - self.totalMap.min()) * (255 - 0) / (self.totalMap.max() - self.totalMap.min())).astype(np.uint8)
+                totalMap_normalized = ((self.totalMap - self.totalMap.min()) * (255 - 0) / (
+                            self.totalMap.max() - self.totalMap.min())).astype(np.uint8)
 
                 # Convert the normalized array to integers
                 totalMap_int = totalMap_normalized.astype(np.uint8)
@@ -1160,7 +1192,8 @@ class MasterNode(Node):
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
-        self.get_logger().info('[move_straight_to]: currently at (%d %d) with yaw %f, moving straight to (%d, %d)' % (self.botx_pixel, self.boty_pixel, self.yaw, tx, ty))
+        self.get_logger().info('[move_straight_to]: currently at (%d %d) with yaw %f, moving straight to (%d, %d)' % (
+        self.botx_pixel, self.boty_pixel, self.yaw, tx, ty))
         # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
         deltaAngle = Float64()
         deltaAngle.data = target_yaw - self.yaw
@@ -1174,6 +1207,46 @@ class MasterNode(Node):
         else:
             return (71 / (101 - occ_value) - 1) * 1e8 + 1
 
+    def toId(self, y, x, d):
+        return d * self.map_h * self.map_w + y * self.map_w + x
+
+    def construct_graph(self):
+        if self.d_dim == (self.map_h, self.map_w):
+            iter = 0
+            for y in range(self.map_h):
+                for x in range(self.map_w):
+                    for d in range(len(self.dx)):
+                        for i in [1, -1]:
+                            self.d_data[iter] = 5 * self.cost_function(self.processedOcc[y][x])
+                            iter += 1
+                        ny = y + self.dy[d]
+                        nx = x + self.dx[d]
+                        if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+                            self.d_data[iter] = self.cost_function(self.processedOcc[ny][nx])
+                            iter += 1
+        else:
+            self.get_logger().info("[construct_graph]: dimension changed")
+            self.d_dim = (self.map_h, self.map_w)
+            row = []
+            col = []
+            data = []
+            for y in range(self.map_h):
+                for x in range(self.map_w):
+                    for d in range(len(self.dx)):
+                        for i in [1, -1]:
+                            row.append(self.toId(y, x, d))
+                            col.append(self.toId(y, x, (d + i) % 4))
+                            data.append(5 * self.cost_function(self.processedOcc[y][x]))
+                        ny = y + self.dy[d]
+                        nx = x + self.dx[d]
+                        if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+                            row.append(self.toId(y, x, d))
+                            col.append(self.toId(ny, nx, d))
+                            data.append(self.cost_function(self.processedOcc[ny][nx]))
+            self.d_row = np.array(row)
+            self.d_col = np.array(col)
+            self.d_data = np.array(data, dtype=np.float32)
+
     def dijkstra(self):
         dickStarTime = time.time()
 
@@ -1181,54 +1254,41 @@ class MasterNode(Node):
         sy = self.boty_pixel
         cur_dir = round(self.yaw / 90) % 4
 
-        dx = [1, 0, -1, 0]
-        dy = [0, 1, 0, -1]
+        self.construct_graph()
 
-        def toId(y, x, d):
-            return d * self.map_h * self.map_w + y * self.map_w + x
+        timeTaken = time.time() - dickStarTime
+        self.get_logger().info('[dijkstra1]: it took: %f' % timeTaken)
 
-        row = []
-        col = []
-        data = []
-        for y in range(self.map_h):
-            for x in range(self.map_w):
-                for d in range(len(dx)):
-                    for i in [1, -1]:
-                        row.append(toId(y, x, d))
-                        col.append(toId(y, x, (d + i) % 4))
-                        data.append(5 * self.cost_function(self.processedOcc[y][x]))
-                    ny = y + dy[d]
-                    nx = x + dx[d]
-                    if 0 <= ny < self.map_h or 0 <= nx < self.map_w:
-                        row.append(toId(y, x, d))
-                        row.append(toId(ny, nx, d))
-                        data.append(self.cost_function(self.processedOcc[ny][nx]))
+        graph_size = self.map_h * self.map_w * len(self.dx)
+        graph = csr_matrix((self.d_data, (self.d_row, self.d_col)), shape=(graph_size, graph_size))
 
-        graph_size = self.map_h * self.map_w * len(dx)
-        graph = csr_matrix((data, (row, col)), dtype=float, shape=(graph_size, graph_size))
+        timeTaken = time.time() - dickStarTime
+        self.get_logger().info('[dijkstra2]: it took: %f' % timeTaken)
 
-        p_dist, p_pre = dijkstra(graph, indices=toId(sy, sx, cur_dir), return_predecessors=True)
+        p_dist, p_pre = dijkstra(graph, indices=self.toId(sy, sx, cur_dir), return_predecessors=True)
+
+        timeTaken = time.time() - dickStarTime
+        self.get_logger().info('[dijkstra3]: it took: %f' % timeTaken)
 
         self.dist = np.full((self.map_h, self.map_w), np.inf, dtype=float)
-        self.pre = np.full((self.map_h, self.map_w), (-1, -1))
+        self.pre = np.full((self.map_h, self.map_w, 2), -1)
         for y in range(self.map_h):
             for x in range(self.map_w):
                 mn = np.inf
                 opt_d = -1
-                for d in range(len(dx)):
-                    if p_dist[toId(y, x, d)] < mn:
-                        mn = p_dist[toId(y, x, d)]
+                for d in range(len(self.dx)):
+                    if p_dist[self.toId(y, x, d)] < mn:
+                        mn = p_dist[self.toId(y, x, d)]
                         opt_d = d
                 if opt_d == -1:
                     continue
                 self.dist[y][x] = mn
-                p = p_pre[toId(y, x, opt_d)]
+                p = p_pre[self.toId(y, x, opt_d)]
                 if p >= 0:
                     self.pre[y][x] = (p // self.map_w % self.map_h, p % self.map_w)
 
         timeTaken = time.time() - dickStarTime
         self.get_logger().info('[dijkstra]: it took: %f' % timeTaken)
-
 
     def find_path_to(self, tx, ty):
         sx = self.botx_pixel
@@ -1238,7 +1298,8 @@ class MasterNode(Node):
             self.get_logger().info('[path_finding]: no path from cell (%d %d) to cell (%d %d)' % (sx, sy, tx, ty))
             return [], []
 
-        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, self.dist[ty][tx]))
+        self.get_logger().info(
+            '[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, self.dist[ty][tx]))
 
         res_x = []
         res_y = []
@@ -1265,7 +1326,8 @@ class MasterNode(Node):
         return res_x, res_y
 
     def move_to(self, tx, ty):
-        self.get_logger().info('[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
+        self.get_logger().info(
+            '[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
         self.dest_x, self.dest_y = self.find_path_to(tx, ty)
 
         if len(self.dest_x) == 0:
@@ -1273,7 +1335,6 @@ class MasterNode(Node):
             self.state = self.magicState
         else:
             self.state = "maze_moving"
-
 
     def frontierSearch(self):
         if len(self.dilutedOccupancyMap) == 0:
@@ -1341,7 +1402,8 @@ class MasterNode(Node):
                                 continue
 
                             # Check if the neighboring pixel is inside the image and in the frontier
-                            if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w and (i + di, j + dj) in self.frontier:
+                            if 0 <= i + di < self.map_h and 0 <= j + dj < self.map_w and (
+                            i + di, j + dj) in self.frontier:
                                 # Check if the neighboring pixel has not been visited yet
                                 if (i + di, j + dj) not in visited:
                                     # Add the neighboring pixel to the queue and the set of visited pixels
@@ -1397,6 +1459,7 @@ class MasterNode(Node):
 
         self.get_logger().info('[frontierSearch]: frontier points: %s' % str(self.frontierPoints))
 
+
 def main(args=None):
     rclpy.init(args=args)
 
@@ -1417,6 +1480,7 @@ def main(args=None):
         pass
     finally:
         master_node.custom_destroy_node()
+
 
 if __name__ == '__main__':
     main()
