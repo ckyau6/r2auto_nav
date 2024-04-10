@@ -19,6 +19,8 @@ from skimage.morphology import dilation, disk
 from functools import cmp_to_key
 
 from scipy.ndimage import generic_filter
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
 
 import time
 
@@ -191,7 +193,7 @@ class MasterNode(Node):
             'robotControlNode_state_feedback',
             self.robotControlNode_state_feedback_callback,
             10)
-        
+
         ''' ================================================ boolCurve ================================================ '''
         # Create a publisher to the topic "boolCurve", which can changing bool for curve the robot
         self.boolCurve_publisher = self.create_publisher(Int8, 'boolCurve', 10)
@@ -223,7 +225,10 @@ class MasterNode(Node):
         # self.yaw_offset = 0
         self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
-        
+
+        self.dijkstra_freq = 1
+        self.dijkstra_stat = 0
+
         self.path_recalc_freq = 2
         self.path_recalc_stat = 0
 
@@ -311,7 +316,7 @@ class MasterNode(Node):
     def occ_callback(self, msg):
         occTime = time.time()
         self.get_logger().info('[occ_callback]: new occ map!')
-        
+
         dimension_changed = (self.map_w != msg.info.width or self.map_h != msg.info.height)
 
         self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
@@ -403,9 +408,14 @@ class MasterNode(Node):
 
         # self.get_logger().info(str(self.processedOcc == self.oriorimap))
 
+        self.dijkstra_stat += 1
+        self.dijkstra_stat %= self.dijkstra_freq
+        if self.dijkstra_stat == 0 or dimension_changed or self.offset_y != 0 or self.offset_x != 0:
+            self.dijkstra()
+
         # find frontier points
         self.frontierSearch()
-        
+
         self.path_recalc_stat += 1
         self.path_recalc_stat %= self.path_recalc_freq
         if len(self.dest_x) > 0:
@@ -419,14 +429,14 @@ class MasterNode(Node):
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
-                
+
                 self.dest_x = []
                 self.dest_y = []
 
                 self.get_logger().info('[occ_callback]: designation is already mapped; get back to frontier_search')
-                
+
                 self.state = self.magicState
-                
+
                 timeTaken = time.time() - occTime
                 self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
                 return
@@ -435,9 +445,9 @@ class MasterNode(Node):
                 timeTaken = time.time() - occTime
                 self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
                 return
-                
+
             # check the path for the last point which is the destination set last time
-            new_dest_x, new_dest_y, _ = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
+            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
 
             if len(new_dest_x) == 0:
                 self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
@@ -562,7 +572,7 @@ class MasterNode(Node):
             switch_msg = String()
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
-            
+
             # set boolCurve to 0
             boolCurve_msg = Int8()
             boolCurve_msg.data = 0
@@ -1027,7 +1037,7 @@ class MasterNode(Node):
             PLOT_ORI = False
             PLOT_DILUTED = False
             PLOT_PROCESSED = True
-            
+
             # Pixel values
             ROBOT = 0
             # UNMAPPED = 1
@@ -1115,7 +1125,7 @@ class MasterNode(Node):
                 plt.pause(0.00000000001)
             elif PLOT_PROCESSED == True:
                 self.totalMap = self.processedOcc.copy()
-                
+
                 # Normalize the array to the range 0-255
                 totalMap_normalized = ((self.totalMap - self.totalMap.min()) * (255 - 0) / (self.totalMap.max() - self.totalMap.min())).astype(np.uint8)
 
@@ -1124,7 +1134,7 @@ class MasterNode(Node):
 
                 # Convert the single-channel grayscale image to a three-channel RGB image
                 totalMap_rgb = cv2.cvtColor(totalMap_int, cv2.COLOR_GRAY2BGR)
-                
+
                 # Set the value for the path planning points
                 for i in range(len(self.dest_x)):
                     totalMap_rgb[self.dest_y[i]][self.dest_x[i]] = (0, 255, 0)
@@ -1133,7 +1143,7 @@ class MasterNode(Node):
                 plt.imshow(cv2.cvtColor(totalMap_rgb, cv2.COLOR_BGR2RGB), origin='lower')
                 plt.draw_all()
                 plt.pause(0.00000000001)
-                
+
             elif PLOT_ORI == True:
                 # plt.imshow(self.occupancyMap, origin='lower')
 
@@ -1165,49 +1175,71 @@ class MasterNode(Node):
         else:
             return (71 / (101 - occ_value) - 1) * 1e8 + 1
 
+    def dijkstra(self):
+        dickStarTime = time.time()
+
+        sx = self.botx_pixel
+        sy = self.boty_pixel
+        cur_dir = round(self.yaw / 90) % 4
+
+        dx = [1, 0, -1, 0]
+        dy = [0, 1, 0, -1]
+
+        def toId(y, x, d):
+            return d * self.map_h * self.map_w + y * self.map_w + x
+
+        row = []
+        col = []
+        data = []
+        for y in range(self.map_h):
+            for x in range(self.map_w):
+                for d in range(len(dx)):
+                    for i in [1, -1]:
+                        row.append(toId(y, x, d))
+                        col.append(toId(y, x, (d + i) % 4))
+                        data.append(5 * self.cost_function(self.processedOcc[y][x]))
+                    ny = y + dy[d]
+                    nx = x + dx[d]
+                    if 0 <= ny < self.map_h or 0 <= nx < self.map_w:
+                        row.append(toId(y, x, d))
+                        row.append(toId(ny, nx, d))
+                        data.append(self.cost_function(self.processedOcc[ny][nx]))
+
+        graph_size = self.map_h * self.map_w * len(dx)
+        graph = csr_matrix((data, (row, col)), dtype=float, shape=(graph_size, graph_size))
+
+        p_dist, p_pre = dijkstra(graph, indices=toId(sy, sx, cur_dir), return_predecessors=True)
+
+        self.dist = np.full((self.map_h, self.map_w), np.inf, dtype=float)
+        self.pre = np.full((self.map_h, self.map_w), (-1, -1))
+        for y in range(self.map_h):
+            for x in range(self.map_w):
+                mn = np.inf
+                opt_d = -1
+                for d in range(len(dx)):
+                    if p_dist[toId(y, x, d)] < mn:
+                        mn = p_dist[toId(y, x, d)]
+                        opt_d = d
+                if opt_d == -1:
+                    continue
+                self.dist[y][x] = mn
+                p = p_pre[toId(y, x, opt_d)]
+                if p >= 0:
+                    self.pre[y][x] = (p // self.map_w % self.map_h, p % self.map_w)
+
+        timeTaken = time.time() - dickStarTime
+        self.get_logger().info('[dijkstra]: it took: %f' % timeTaken)
+
+
     def find_path_to(self, tx, ty):
         sx = self.botx_pixel
         sy = self.boty_pixel
-        p_dist = [[[1e18 for _ in range(4)] for x in range(self.map_w)] for y in range(self.map_h)]
-        p_pre = [[[(-1, -1, -1) for _ in range(4)] for x in range(self.map_w)] for y in range(self.map_h)]
-        cur_dir = round(self.yaw / 90) % 4
-        p_dist[sy][sx][cur_dir] = 0
-        pq = []
-        heapq.heappush(pq, (0, sy, sx, cur_dir))
-        dx = [1, 0, -1, 0]
-        dy = [0, 1, 0, -1]
-        while pq:
-            d, y, x, dir = heapq.heappop(pq)
-            if y == ty and x == tx:
-                break
-            if d > p_dist[y][x][dir]:
-                continue
-            for k in range(4):
-                r = (k - dir) % 4
-                r = min(r, 4 - r)
-                nd = d + 5 * self.cost_function(self.processedOcc[y][x]) * r
-                if p_dist[y][x][k] > nd:
-                    p_dist[y][x][k] = nd
-                    p_pre[y][x][k] = p_pre[y][x][dir]
-                    heapq.heappush(pq, (nd, y, x, k))
-            ny = y + dy[dir]
-            nx = x + dx[dir]
-            if ny < 0 or ny >= self.map_h or nx < 0 or nx >= self.map_w:
-                continue
-            nd = d + self.cost_function(self.processedOcc[ny][nx])
-            if p_dist[ny][nx][dir] > nd:
-                p_dist[ny][nx][dir] = nd
-                p_pre[ny][nx][dir] = (y, x, dir)
-                heapq.heappush(pq, (nd, ny, nx, dir))
 
-        opt_k = np.argmin(p_dist[ty][tx])
-        opt_d = p_dist[ty][tx][opt_k]
-
-        if p_pre[ty][tx][opt_k] == (-1, -1, -1):
+        if self.dist[ty][tx] == np.inf:
             self.get_logger().info('[path_finding]: no path from cell (%d %d) to cell (%d %d)' % (sx, sy, tx, ty))
-            return [], [], 0
+            return [], []
 
-        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, opt_d))
+        self.get_logger().info('[path_finding]: distance from cell (%d %d) to cell (%d %d) is %f' % (sx, sy, tx, ty, self.dist[ty][tx]))
 
         res_x = []
         res_y = []
@@ -1220,7 +1252,7 @@ class MasterNode(Node):
             res_y.append(ty)
             if ty == sy and tx == sx:
                 break
-            ty, tx, opt_k = self.pre[ty][tx][opt_k]
+            ty, tx = self.pre[ty][tx]
         res_x.reverse()
         res_y.reverse()
         if len(res_x) >= 3:
@@ -1231,11 +1263,11 @@ class MasterNode(Node):
                 res_y.pop(1)
         self.get_logger().info('[path_finding]: x: %s, y: %s' % (str(res_x), str(res_y)))
 
-        return res_x, res_y, opt_d
+        return res_x, res_y
 
     def move_to(self, tx, ty):
         self.get_logger().info('[move_to]: currently at (%d %d), moving to (%d, %d)' % (self.botx_pixel, self.boty_pixel, tx, ty))
-        self.dest_x, self.dest_y, _ = self.find_path_to(tx, ty)
+        self.dest_x, self.dest_y = self.find_path_to(tx, ty)
 
         if len(self.dest_x) == 0:
             self.get_logger().info('[move_to]: no path found get back to magicState: %s' % self.magicState)
@@ -1345,8 +1377,7 @@ class MasterNode(Node):
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
 
                 # skip if it is not reachable
-                _, _, opt_d = self.find_path_to(middle_x, middle_y)
-                if opt_d >= 2e9:
+                if self.dist[middle_y][middle_x] >= 2e9:
                     self.get_logger().info('[frontierSearch]: point (%d %d) is too far; skipped' % (middle_x, middle_y))
                     continue
 
