@@ -254,12 +254,19 @@ class MasterNode(Node):
         self.magicOriginy_pixel = 0
 
         # for dijkstra
-        self.dx = [1, 0, -1, 0]
-        self.dy = [0, 1, 0, -1]
+        self.dx = np.array([1, 0, -1, 0])
+        self.dy = np.array([0, 1, 0, -1])
         self.d_row = []
         self.d_col = []
         self.d_data = []
         self.d_dim = (0, 0)
+        # map values in the processed map (0 ~ 100) to evaluated values (1 ~ inf)
+        self.d_cost = np.arange(101, dtype=np.float32)
+        for i in range(101):
+            if i <= 30:
+                self.d_cost[i] = 1
+            else:
+                self.d_cost[i] = (71 / (101 - i) - 1) * 1e8 + 1
 
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
@@ -415,7 +422,7 @@ class MasterNode(Node):
             return new_pixel
 
         # Apply the function over a moving window on the image
-        self.processedOcc = generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))
+        self.processedOcc = np.round(generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))).astype(int)
 
         # regard unmapped area as perfectly blocked area
         self.processedOcc[unmapped_mask] = 100
@@ -1200,13 +1207,6 @@ class MasterNode(Node):
         self.deltaAngle_publisher.publish(deltaAngle)
         self.state = "maze_rotating"
 
-    # map values in the processed map (0 ~ 100) to evaluated values (1 ~ inf)
-    def cost_function(self, occ_value):
-        if occ_value <= 30:
-            return 1
-        else:
-            return (71 / (101 - occ_value) - 1) * 1e8 + 1
-
     def toId(self, y, x, d):
         return d * self.map_h * self.map_w + y * self.map_w + x
 
@@ -1217,12 +1217,12 @@ class MasterNode(Node):
                 for x in range(self.map_w):
                     for d in range(len(self.dx)):
                         for i in [1, -1]:
-                            self.d_data[iter] = 5 * self.cost_function(self.processedOcc[y][x])
+                            self.d_data[iter] = 5 * self.d_cost[self.processedOcc[y][x]]
                             iter += 1
                         ny = y + self.dy[d]
                         nx = x + self.dx[d]
                         if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
-                            self.d_data[iter] = self.cost_function(self.processedOcc[ny][nx])
+                            self.d_data[iter] = self.d_cost[self.processedOcc[ny][nx]]
                             iter += 1
         else:
             self.get_logger().info("[construct_graph]: dimension changed")
@@ -1236,13 +1236,13 @@ class MasterNode(Node):
                         for i in [1, -1]:
                             row.append(self.toId(y, x, d))
                             col.append(self.toId(y, x, (d + i) % 4))
-                            data.append(5 * self.cost_function(self.processedOcc[y][x]))
+                            data.append(5 * self.d_cost[self.processedOcc[y][x]])
                         ny = y + self.dy[d]
                         nx = x + self.dx[d]
                         if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
                             row.append(self.toId(y, x, d))
                             col.append(self.toId(ny, nx, d))
-                            data.append(self.cost_function(self.processedOcc[ny][nx]))
+                            data.append(self.d_cost[self.processedOcc[ny][nx]])
             self.d_row = np.array(row)
             self.d_col = np.array(col)
             self.d_data = np.array(data, dtype=np.float32)
