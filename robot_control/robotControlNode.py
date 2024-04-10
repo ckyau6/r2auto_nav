@@ -143,7 +143,7 @@ class RobotControlNode(Node):
             
             # to stop curving
             if self.curveState == 0:
-                self.state = "rotateStop"
+                self.linearVel = 0.0
 
     def deltaAngle_callback(self, msg): 
         # Create a subscriber to the topic "cmd_deltaAngle"
@@ -180,7 +180,7 @@ class RobotControlNode(Node):
             
             # to stop curving
             if self.curveState == 0:
-                self.state = "rotateStop"
+                self.linearVel = 0.0
             
     def boolCurve_callback(self, msg):
         if msg.data == 0:
