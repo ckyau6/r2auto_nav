@@ -35,8 +35,10 @@ occ_bins = [-1, 0, 65, 100]
 CLEARANCE_RADIUS = 10
 
 # this is in pixel
-FRONTIER_THRESHOLD = 4
-PIXEL_DEST_THRES = 2
+# FRONTIER_THRESHOLD = 4
+FRONTIER_THRESHOLD = 2
+# PIXEL_DEST_THRES = 2
+PIXEL_DEST_THRES = 0
 
 NAV_TOO_CLOSE = 0.15
 
@@ -73,7 +75,8 @@ OPEN = 2
 OBSTACLE = 3
 
 # this is for path finder to ignore close points, in pixels
-RADIUS_OF_IGNORE = 3
+# RADIUS_OF_IGNORE = 3
+RADIUS_OF_IGNORE = 1
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -225,10 +228,7 @@ class MasterNode(Node):
         # self.yaw_offset = 0
         self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
-
-        self.dijkstra_freq = 1
-        self.dijkstra_stat = 0
-
+        
         self.path_recalc_freq = 2
         self.path_recalc_stat = 0
 
@@ -387,13 +387,15 @@ class MasterNode(Node):
 
         PARAMETER_R = 0.90
         # use odd number for window size
-        WINDOWSIZE = 21
+        # WINDOWSIZE = 21
+        WINDOWSIZE = 9
 
         # Define the function to apply over the moving window
         def func(window):
             # Calculate the distances from the center of the grid
             center = WINDOWSIZE // 2
             distances = np.sqrt((np.arange(WINDOWSIZE) - center)**2 + (np.arange(WINDOWSIZE)[:, None] - center)**2).reshape(WINDOWSIZE**2)
+            distances *= 2.5 #TEMP
 
             # Calculate the new pixel value
             new_pixel = np.max(window * PARAMETER_R**distances)
@@ -408,10 +410,7 @@ class MasterNode(Node):
 
         # self.get_logger().info(str(self.processedOcc == self.oriorimap))
 
-        self.dijkstra_stat += 1
-        self.dijkstra_stat %= self.dijkstra_freq
-        if self.dijkstra_stat == 0 or dimension_changed or self.offset_y != 0 or self.offset_x != 0:
-            self.dijkstra()
+        self.dijkstra()
 
         # find frontier points
         self.frontierSearch()
@@ -901,9 +900,9 @@ class MasterNode(Node):
                     if any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
 
-                        # set linear to be 127 to move forward fastest
+                        # set linear to be self.linear_speed to move forward fastest
                         linear_msg = Int8()
-                        linear_msg.data = 127
+                        linear_msg.data = self.linear_speed
                         self.linear_publisher.publish(linear_msg)
 
 
@@ -913,10 +912,10 @@ class MasterNode(Node):
                         # elif right got something, rotate left
                         # else go straight
                         if all(self.laser_range[self.leftIndexL:self.leftIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = -127
+                            anglularVel_msg.data = -self.linear_speed
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and right')
                         elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = 127
+                            anglularVel_msg.data = self.linear_speed
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and left')
                         else:
                             anglularVel_msg.data = 0
@@ -993,9 +992,9 @@ class MasterNode(Node):
                 self.get_logger().info('[moving_to_bucket]: still rotating, waiting')
                 pass
             else:
-                # set linear to be 127 to move forward fastest
+                # set linear to be self.linear_speed to move forward fastest
                 linear_msg = Int8()
-                linear_msg.data = 127
+                linear_msg.data = self.linear_speed
                 self.linear_publisher.publish(linear_msg)
 
                 # if the bucket is in the to the right, turn left slightly
