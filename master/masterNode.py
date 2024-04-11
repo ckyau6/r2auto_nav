@@ -39,7 +39,7 @@ CLEARANCE_RADIUS = 5
 # FRONTIER_THRESHOLD = 4
 FRONTIER_THRESHOLD = 2
 # PIXEL_DEST_THRES = 2
-PIXEL_DEST_THRES = 0
+PIXEL_DEST_THRES = 1
 
 NAV_TOO_CLOSE = 0.21
 
@@ -85,7 +85,7 @@ PARAMETER_R = 0.90
 WINDOWSIZE = 9
 
 # if distance is more than this value, skip that point
-FRONTIER_SKIP_THRESHOLD = 2e8
+FRONTIER_SKIP_THRESHOLD = 1e9
 
 # distance to two points to be considered sorted by lower y, in meter
 FRONTIER_DIST_M = 0.10
@@ -241,7 +241,7 @@ class MasterNode(Node):
         self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
 
-        self.path_recalc_freq = 3
+        self.path_recalc_freq = 20
         self.path_recalc_stat = 0
 
         self.dest_x = []
@@ -264,8 +264,8 @@ class MasterNode(Node):
         self.magicOriginy_pixel = 0
 
         # for dijkstra
-        self.dx = np.array([1, 0, -1, 0])
-        self.dy = np.array([0, 1, 0, -1])
+        self.dx = np.array([1, 1, 0, -1, -1, -1, 0, 1])
+        self.dy = np.array([0, 1, 1, 1, 0, -1, -1, -1])
         self.d_row = []
         self.d_col = []
         self.d_data = []
@@ -716,6 +716,16 @@ class MasterNode(Node):
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                # move backward for 1 sec
+                linear_msg.data = -self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                start = time.time()
+                while time.time() - start < 1:
+                    pass
+                
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
 
                 # get rid of point that is too close to wall in the first place and take the next one
                 # cannot take final one if its like thru a wall
