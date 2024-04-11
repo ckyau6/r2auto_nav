@@ -1538,7 +1538,7 @@ class MasterNode(Node):
         res_y = []
         while True:
             if len(res_x) >= 2:
-                if res_x[-2] == res_x[-1] == tx or res_y[-2] == res_y[-1] == ty:
+                if (res_x[-2] - tx) * (res_y[-1] - ty) == (res_x[-1] - tx) * (res_y[-2] - ty):
                     res_x.pop()
                     res_y.pop()
             # if len(res_x) >= 2:
