@@ -1,13 +1,12 @@
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid , Odometry
-from geometry_msgs.msg import Twist, Pose
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 import numpy as np
-import heapq , math , random 
+import heapq , math , random
 import scipy.interpolate as si
 import sys , threading , time
-from std_msgs.msg import UInt8, UInt16, Float64, String, Int8
 
 lookahead_distance = 0.24 #distance at which the robot will look ahead to determine its next action
 speed = 0.18 #maximum velocity of the robot
@@ -285,11 +284,13 @@ def costmap(data,width,height,resolution):
             y = np.clip(y,0,width-1)
             data[x,y] = 100
     data = data*resolution
+    print(data)
     return data
 
 def exploration(data,width,height,resolution,column,row,originX,originY):
         global pathGlobal #Global degisken
         data = costmap(data,width,height,resolution) #Engelleri genislet
+
         data[row][column] = 0 #Robot Anlık Konum
         data[data > 5] = 1 # 0 olanlar gidilebilir yer, 100 olanlar kesin engel
         data = frontierB(data) #Sınır noktaları bul
@@ -328,32 +329,17 @@ class navigationControl(Node):
     def __init__(self):
         super().__init__('Exploration')
         self.subscription = self.create_subscription(OccupancyGrid,'map',self.map_callback,10)
-        #self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
-        self.subscription = self.create_subscription(Pose,'position',self.pos_callback,10)
-        self.y = self.x = self.yaw = 0
-        self.originX = self.originY = 0
+        self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
         self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,10)
-
-        ''' ================================================ cmd_linear ================================================ '''
-        # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
-        self.linear_publisher = self.create_publisher(Int8, 'cmd_linear', 10)
-
-        ''' ================================================ cmd_anglularVel ================================================ '''
-        # Create a publisher to the topic "cmd_angle", which can rotate the robot
-        self.anglularVel_publisher = self.create_publisher(Int8, 'cmd_anglularVel', 10)
-
-        ''' ================================================ cmd_deltaAngle ================================================ '''
-        # Create a publisher to the topic "cmd_angle", which can rotate the robot
-        self.deltaAngle_publisher = self.create_publisher(Float64, 'cmd_deltaAngle', 10)
-
+        self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
         print("[BILGI] KESİF MODU AKTİF")
         self.kesif = True
         threading.Thread(target=self.exp).start() #Kesif fonksiyonunu thread olarak calistirir.
         
     def exp(self):
-
+        twist = Twist()
         while True: #Sensor verileri gelene kadar bekle.
-            if not hasattr(self,'map_data') or not hasattr(self,'pos_data') or not hasattr(self,'scan_data'):
+            if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
                 time.sleep(0.1)
                 continue
             if self.kesif == True:
@@ -388,15 +374,9 @@ class navigationControl(Node):
                     self.kesif = True
                     print("[BILGI] HEDEFE ULASILDI")
                     self.t.join() #Thread bitene kadar bekle.
-
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = math.degrees(w)
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
-                linear_msg = Int8()
-                v = int(v*128/0.22)
-                linear_msg.data = v
-                self.linear_publisher.publish(linear_msg)
-
+                twist.linear.x = v
+                twist.angular.z = w
+                self.publisher.publish(twist)
                 time.sleep(0.1)
             #Rota Takip Blok Bitis
 
@@ -416,13 +396,13 @@ class navigationControl(Node):
         self.height = self.map_data.info.height
         self.data = self.map_data.data
 
-    def pos_callback(self, msg):
-        self.pos_data = msg
-        # Note: those values are different from the values obtained from odom
-        self.x = msg.position.x
-        self.y = msg.position.y
-        # in degrees (not radians)
-        self.yaw = euler_from_quaternion(msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w)
+    def odom_callback(self,msg):
+        self.odom_data = msg
+        self.x = msg.pose.pose.position.x
+        self.y = msg.pose.pose.position.y
+        self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
+        msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
+
 
 def main(args=None):
     rclpy.init(args=args)
