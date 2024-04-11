@@ -33,7 +33,7 @@ occ_bins = [-1, 0, 65, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 10
+CLEARANCE_RADIUS = 5
 
 # this is in pixel
 # FRONTIER_THRESHOLD = 4
@@ -41,7 +41,7 @@ FRONTIER_THRESHOLD = 2
 # PIXEL_DEST_THRES = 2
 PIXEL_DEST_THRES = 0
 
-NAV_TOO_CLOSE = 0.20
+NAV_TOO_CLOSE = 0.21
 
 BUCKET_TOO_CLOSE = 0.30
 
@@ -59,7 +59,7 @@ BACK_ANGLE_RANGE = 5
 BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
 BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
 
-MAZE_FRONT_RANGE = 45
+MAZE_FRONT_RANGE = 30
 MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
 MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 
@@ -87,7 +87,8 @@ WINDOWSIZE = 9
 # if distance is more than this value, skip that point
 FRONTIER_SKIP_THRESHOLD = 2e8
 
-
+# distance to two points to be considered sorted by lower y, in meter
+FRONTIER_DIST_M = 0.10
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -613,6 +614,17 @@ class MasterNode(Node):
             if self.magicState == "frontier_search" and self.frontierPoints == []:
                 self.get_logger().info('[masterFSM]: no more frontier points go to move_to_hallway')
                 self.state = self.magicState = "move_to_hallway"
+                
+                # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
 
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
@@ -825,14 +837,21 @@ class MasterNode(Node):
                 
                 return
                 
-            # check if hall way is reachable
-            # if not reachable, throw error (or do somthing else)
-            # else move to the hallway
-            if len(self.find_path_to(self.finishLine_pixel[0], self.finishLine_pixel[1])[0]) == 0:
-                self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
+            # check if hallway is even in map, if its not, means frontier has not been fully explored, go back to frontier search
+            # froniter search changes as confidence in map changes hence sometime when there is no more frontier, but after some time, there is more
+            if self.finishLine_pixel[0] < 0 or self.finishLine_pixel[1] < 0 or self.finishLine_pixel[0] >= self.map_w or self.finishLine_pixel[1] >= self.map_h:
+                self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable is not in map' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
+                
+                self.state = self.magicState = "frontier_search"
             else:
-                self.get_logger().info('[move_to_hallway]: going to finishLine_pixel: (%d, %d)' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
-                self.move_to(self.finishLine_pixel[0], self.finishLine_pixel[1], print=True)
+                # check if hall way is reachable
+                # if not reachable, throw error (or do somthing else)
+                # else move to the hallway
+                if len(self.find_path_to(self.finishLine_pixel[0], self.finishLine_pixel[1])[0]) == 0:
+                    self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
+                else:
+                    self.get_logger().info('[move_to_hallway]: going to finishLine_pixel: (%d, %d)' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
+                    self.move_to(self.finishLine_pixel[0], self.finishLine_pixel[1], print=True)
 
         elif self.state == "http_request":
             if self.doorStatus == "idle":
@@ -1234,10 +1253,13 @@ class MasterNode(Node):
         ''' ================================================ DEBUG PLOT ================================================ '''
         try:
             if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
-                # PLOT_ORI = False
                 PLOT_ORI = False
                 PLOT_DILUTED = False
                 PLOT_PROCESSED = True
+                
+                # PLOT_ORI = False
+                # PLOT_DILUTED = True
+                # PLOT_PROCESSED = False
                 
                 # Pixel values
                 ROBOT = 0
@@ -1660,7 +1682,21 @@ class MasterNode(Node):
                 return -1 if d_to_a < d_to_b else 1
 
             self.frontierPoints.sort(key=cmp_to_key(cmp_points))
-
+            
+            if len(self.frontierPoints) >= 2:
+                # if the first two points distance are closer than FRONTIER_DIST_M, sort by lower y value first
+                d0 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[0]))
+                d1 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[1]))
+                
+                if abs(d0 - d1) < FRONTIER_DIST_M / self.map_res:
+                    # comapre y values
+                    if self.frontierPoints[0][1] > self.frontierPoints[1][1]:
+                        self.frontierPoints[0], self.frontierPoints[1] = self.frontierPoints[1], self.frontierPoints[0]
+                        
+                # to hope to prevent oscillatory behavior
+                self.get_logger().info('[frontierSearch]: distance closest two points')
+                
+            
         self.get_logger().info('[frontierSearch]: frontier points: %s' % str(self.frontierPoints))
 
 
