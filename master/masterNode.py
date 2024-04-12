@@ -29,19 +29,19 @@ import cv2
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
 
-occ_bins = [-1, 0, 60, 100]
+occ_bins = [-1, 0, 50, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 5
+CLEARANCE_RADIUS = 10
 
 # this is in pixel
 # FRONTIER_THRESHOLD = 4
 FRONTIER_THRESHOLD = 2
 # PIXEL_DEST_THRES = 2
-PIXEL_DEST_THRES = 1
+PIXEL_DEST_THRES = 2
 
-NAV_TOO_CLOSE = 0.25
+NAV_TOO_CLOSE = 0.26
 BUTT_TOO_CLOSE = 0.10
 
 BUCKET_TOO_CLOSE = 0.30
@@ -83,13 +83,17 @@ RADIUS_OF_IGNORE = 1
 PARAMETER_R = 0.91
 # use odd number for window size
 # WINDOWSIZE = 21
-WINDOWSIZE = 9
+# WINDOWSIZE = 9
+WINDOWSIZE = 25
 
 # if distance is more than this value, skip that point
 FRONTIER_SKIP_THRESHOLD = 1e9
 
 # distance to two points to be considered sorted by lower y, in meter
 FRONTIER_DIST_M = 0.10
+
+# time in s to wait after no more frontier before goin to hall way
+WAIT_FRONTIER = 10
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -304,7 +308,7 @@ class MasterNode(Node):
         # "released" or "pressed"
         self.switchStatus = msg.data
         if self.state == "moving_to_bucket" and self.switchStatus == "pressed":
-            self.state = "releasing"
+            self.state = self.magicState = "releasing"
 
             # set linear to be zero
             linear_msg = Int8()
@@ -586,6 +590,13 @@ class MasterNode(Node):
                           "checking_walls_distance"] 
         if msg.data in self.stateList:
             self.state = self.magicState = msg.data
+            
+            if msg.data == "checking_walls_distance":
+                # only used for injecting 
+                # set boolCurve to 1, to be place in the state before checking_walls_distance
+                boolCurve_msg = Int8()
+                boolCurve_msg.data = 1
+                self.boolCurve_publisher.publish(boolCurve_msg)
         else:
             mode, tx, ty = map(int, self.state.split())
             if mode == 0:
@@ -643,8 +654,9 @@ class MasterNode(Node):
             pass
         else:
             if self.magicState == "frontier_search" and self.frontierPoints == []:
-                self.get_logger().info('[masterFSM]: no more frontier points go to move_to_hallway')
-                self.state = self.magicState = "move_to_hallway"
+                self.get_logger().info('[masterFSM]: no more frontier points go to wait_for_frontier')
+                self.state = self.magicState = "wait_for_frontier"
+                self.lastWaitForFrontier = time.time()
                 
                 # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
                 # set linear to be zero
@@ -657,45 +669,52 @@ class MasterNode(Node):
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
-        # if self.magicState != "idle" or self.magicState != "moving_to_bucket":
-        #     # if obstacle in front and close to both sides, rotate to move between the two
-        #     if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
-        #             or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
-        #             or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
-        #             or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])):
-        #         self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
-
-        #         # set linear to be zero
-        #         linear_msg = Int8()
-        #         linear_msg.data = 0
-        #         self.linear_publisher.publish(linear_msg)
-
-        #         # set delta angle = 0 to stop
-        #         deltaAngle_msg = Float64()
-        #         deltaAngle_msg.data = 0.0
-        #         self.deltaAngle_publisher.publish(deltaAngle_msg)
+        listStateIgnoreForObstacle = ["idle", 
+                                      "checking_walls_distance",
+                                      "rotating_to_move_away_from_walls"
+                                      "rotating_to_bucket",
+                                      "moving_to_bucket",
+                                      "releasing",
+                                      ]
                 
-        #         # move backward for 0.2 sec as long as butt has space
-        #         linear_msg.data = -self.linear_speed
-        #         self.linear_publisher.publish(linear_msg)
-        #         start = time.time()
-        #         while (time.time() - start < 0.2) \
-        #             and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
-        #             and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
-        #             pass
-                
-        #         linear_msg.data = 0
-        #         self.linear_publisher.publish(linear_msg)
+        if self.magicState not in listStateIgnoreForObstacle:
+            # if obstacle in front and close to both sides, rotate to move between the two
+            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+                    or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])):
+                self.get_logger().warn('[masterFSM]: ahhh wall to close to front uwu')
 
-        #         # get rid of point that is too close to wall in the first place and take the next one
-        #         # cannot take final one if its like thru a wall
-        #         self.dest_x.clear()
-        #         self.dest_y.clear()
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
-        #         self.get_logger().warn(
-        #             '[maze_moving]: get back to magicState: %s' % self.magicState)
-        #         self.state = self.magicState
-        #         return
+                # move backward for 0.2 sec as long as butt has space
+                linear_msg.data = -self.linear_speed
+                self.linear_publisher.publish(linear_msg)
+                start = time.time()
+                while (time.time() - start < 0.2) \
+                    and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
+                    and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
+                    pass
+                
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+
+                # get rid of point that is too close to wall in the first place and take the next one
+                # cannot take final one if its like thru a wall
+                self.dest_x.clear()
+                self.dest_y.clear()
+                
+                self.get_logger().warn(
+                    '[masterFSM]: get back to magicState: %s' % self.magicState)
+                self.state = self.magicState
 
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
@@ -794,7 +813,7 @@ class MasterNode(Node):
                 linear_msg.data = -self.linear_speed
                 self.linear_publisher.publish(linear_msg)
                 start = time.time()
-                while (time.time() - start < 0.2) \
+                while (time.time() - start < 0.3) \
                     and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
                     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
                     pass
@@ -900,7 +919,22 @@ class MasterNode(Node):
             self.get_logger().info('[frontier_search]: next destination: (%d, %d)' % (destination[0], destination[1]))
 
             self.move_to(destination[0], destination[1])
-
+            
+        elif self.state == "wait_for_frontier":
+            # after WAIT_FRONTIER sec, go to move_to_hallway
+            
+            self.get_logger().info('[wait_for_frontier]: waitng until %f, now is %f' % (WAIT_FRONTIER, time.time() - self.lastWaitForFrontier))
+            
+            if len(self.frontierPoints) > 0:
+                self.get_logger().info('[wait_for_frontier]: frontier points found go to frontier_search')
+                self.state = self.magicState = "frontier_search"
+                return
+            
+            if time.time() - self.lastWaitForFrontier > WAIT_FRONTIER:
+                self.get_logger().info('[wait_for_frontier]: time is up go to move_to_hallway')
+                self.state = self.magicState = "move_to_hallway"
+                return
+            
         elif self.state == "move_to_hallway":
             if abs(self.botx_pixel - self.finishLine_pixel[0]) <= PIXEL_DEST_THRES and abs(
                     self.boty_pixel - self.finishLine_pixel[1]) <= PIXEL_DEST_THRES:
@@ -936,7 +970,7 @@ class MasterNode(Node):
                     self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
                 else:
                     self.get_logger().info('[move_to_hallway]: going to finishLine_pixel: (%d, %d)' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
-                    self.move_to(self.finishLine_pixel[0], self.finishLine_pixel[1], print=True)
+                    self.move_to(self.finishLine_pixel[0], self.finishLine_pixel[1])
 
         elif self.state == "http_request":
             if self.doorStatus == "idle":
@@ -948,11 +982,19 @@ class MasterNode(Node):
 
             elif self.doorStatus == "door1":
                 self.get_logger().info('[http_request]: door1 opened')
+                # if nav works
                 self.state = self.magicState = "go_to_left_door"
+                
+                # if nav is still not working, put bot at centre of both door facing right door and start http_request
+                # self.state = self.magicState = "rotate_to_left_door"
 
             elif self.doorStatus == "door2":
                 self.get_logger().info('[http_request]: door2 opened')
+                # if nav works
                 self.state = self.magicState = "go_to_right_door"
+                
+                # if nav is still not working, put bot at centre of both door facing right door and start http_request
+                # self.state = self.magicState = "rotate_to_right_door"
 
             elif self.doorStatus == "connection error":
                 self.get_logger().warn('[http_request]: connection error')
@@ -991,7 +1033,7 @@ class MasterNode(Node):
                 self.get_logger().warn('[go_to_left_door]: leftDoor_pixel: (%d, %d) is not reachable' % (self.leftDoor_pixel[0], self.leftDoor_pixel[1]))
             else:
                 self.get_logger().info('[go_to_left_door]: going to leftDoor_pixel: (%d, %d)' % (self.leftDoor_pixel[0], self.leftDoor_pixel[1]))
-                self.move_to(self.leftDoor_pixel[0], self.leftDoor_pixel[1], print=True)
+                self.move_to(self.leftDoor_pixel[0], self.leftDoor_pixel[1])
                 
         elif self.state == "go_to_right_door":
             if abs(self.botx_pixel - self.rightDoor_pixel[0]) <= PIXEL_DEST_THRES and abs(
@@ -1021,7 +1063,7 @@ class MasterNode(Node):
                 self.get_logger().warn('[go_to_right_door]: rightDoor_pixel: (%d, %d) is not reachable' % (self.rightDoor_pixel[0], self.rightDoor_pixel[1]))
             else:
                 self.get_logger().info('[go_to_right_door]: going to rightDoor_pixel: (%d, %d)' % (self.rightDoor_pixel[0], self.rightDoor_pixel[1]))
-                self.move_to(self.rightDoor_pixel[0], self.rightDoor_pixel[1], print=True)
+                self.move_to(self.rightDoor_pixel[0], self.rightDoor_pixel[1])
 
         elif self.state == "rotate_to_left_door":
             # this assume that the robot is started straight and door is perpendicular to the robot starting yaw
@@ -1170,10 +1212,10 @@ class MasterNode(Node):
                 deltaAngle_msg.data = angle_min - 180.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-                self.state = "rotating_to_move_away_from_walls"
+                self.state = self.magicState = "rotating_to_move_away_from_walls"
 
             else:
-                self.state = "rotating_to_bucket"
+                self.state = self.magicState = "rotating_to_bucket"
         elif self.state == "rotating_to_move_away_from_walls":
             # if still rotating wait, else can move forward until the back is 30 cm away
             if self.robotControlNodeState == "rotateByAngle":
@@ -1200,7 +1242,7 @@ class MasterNode(Node):
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
                     # send back to checking_walls_distance to check for all distance again
-                    self.state = "checking_walls_distance"
+                    self.state = self.magicState = "checking_walls_distance"
 
                 else:
                     self.get_logger().info('[rotating_to_move_away_from_walls]: front is still clear! go forward')
@@ -1244,13 +1286,13 @@ class MasterNode(Node):
                         self.deltaAngle_publisher.publish(deltaAngle_msg)
 
                         # send back to checking_walls_distance to check for all distance again
-                        self.state = "checking_walls_distance"
+                        self.state = self.magicState = "checking_walls_distance"
 
         elif self.state == "rotating_to_bucket":
             # if close to forward, go to next state, else align to bucket first
             if abs(self.bucketAngle) < 2:
                 self.get_logger().info('[rotating_to_bucket]: close enough, moving to bucket now')
-                self.state = "moving_to_bucket"
+                self.state = self.magicState = "moving_to_bucket"
             else:
                 self.get_logger().info('[rotating_to_bucket]: rotating to face bucket')
 
@@ -1287,7 +1329,7 @@ class MasterNode(Node):
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
                 # send to moving_to_bucket to wait for rotation to finish
-                self.state = "moving_to_bucket"
+                self.state = self.magicState = "moving_to_bucket"
 
                 # on limit switch
                 switch_msg = String()
@@ -1330,7 +1372,7 @@ class MasterNode(Node):
 
             # 5 second after releasing, go back to idle
             if (time.time() - self.lastState) > 5:
-                self.state = "idle"
+                self.state = self.magicState = "idle"
 
         else:
             self.get_logger().error('state %s not defined' % self.state)
