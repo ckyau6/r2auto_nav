@@ -29,7 +29,7 @@ import cv2
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
 
-occ_bins = [-1, 0, 65, 100]
+occ_bins = [-1, 0, 60, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
@@ -41,7 +41,8 @@ FRONTIER_THRESHOLD = 2
 # PIXEL_DEST_THRES = 2
 PIXEL_DEST_THRES = 1
 
-NAV_TOO_CLOSE = 0.21
+NAV_TOO_CLOSE = 0.25
+BUTT_TOO_CLOSE = 0.10
 
 BUCKET_TOO_CLOSE = 0.30
 
@@ -59,7 +60,7 @@ BACK_ANGLE_RANGE = 5
 BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
 BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
 
-MAZE_FRONT_RANGE = 30
+MAZE_FRONT_RANGE = 25
 MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
 MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 
@@ -79,7 +80,7 @@ OBSTACLE = 3
 # RADIUS_OF_IGNORE = 3
 RADIUS_OF_IGNORE = 1
 
-PARAMETER_R = 0.90
+PARAMETER_R = 0.91
 # use odd number for window size
 # WINDOWSIZE = 21
 WINDOWSIZE = 9
@@ -150,6 +151,21 @@ class MasterNode(Node):
             qos_profile_sensor_data)
         self.scan_subscription  # prevent unused variable warning
         self.laser_range = np.array([])
+        
+        self.bucketFrontLeftIndex = 0
+        self.bucketFrontRightIndex = 0
+
+        self.leftIndexL = 0
+        self.leftIndexH = 0
+
+        self.rightIndexL = 0
+        self.rightIndexH = 0
+
+        self.backIndexL = 0
+        self.backIndexH = 0
+
+        self.mazeFrontLeftindex = 0
+        self.mazeFrontRightindex = 0
 
         ''' ================================================ bucket ================================================ '''
         # Listens for the bucket angle
@@ -264,8 +280,10 @@ class MasterNode(Node):
         self.magicOriginy_pixel = 0
 
         # for dijkstra
-        self.dx = np.array([1, 1, 0, -1, -1, -1, 0, 1])
-        self.dy = np.array([0, 1, 1, 1, 0, -1, -1, -1])
+        # self.dx = np.array([1, 1, 0, -1, -1, -1, 0, 1])
+        # self.dy = np.array([0, 1, 1, 1, 0, -1, -1, -1])
+        self.dx = np.array([1, 0, -1, 0])
+        self.dy = np.array([0, 1, 0, -1])
         self.d_row = []
         self.d_col = []
         self.d_data = []
@@ -601,6 +619,19 @@ class MasterNode(Node):
         self.destroy_node()
 
     def masterFSM(self):
+        # testing lidar
+        # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+        #             or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+        #             or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+        #             or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])):
+        #         self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
+
+        # if not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
+        #     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
+        #     self.get_logger().warn('[maze_moving]: back is clear')
+        
+        # return
+            
         self.get_logger().info('[masterFSM]: self.state: %s, self.magicState %s' % (self.state, self.magicState))
 
         # check if the robot is stuck in map and in frontier search
@@ -625,6 +656,46 @@ class MasterNode(Node):
                 deltaAngle_msg = Float64()
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+        # if self.magicState != "idle" or self.magicState != "moving_to_bucket":
+        #     # if obstacle in front and close to both sides, rotate to move between the two
+        #     if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+        #             or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+        #             or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+        #             or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])):
+        #         self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
+
+        #         # set linear to be zero
+        #         linear_msg = Int8()
+        #         linear_msg.data = 0
+        #         self.linear_publisher.publish(linear_msg)
+
+        #         # set delta angle = 0 to stop
+        #         deltaAngle_msg = Float64()
+        #         deltaAngle_msg.data = 0.0
+        #         self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+        #         # move backward for 0.2 sec as long as butt has space
+        #         linear_msg.data = -self.linear_speed
+        #         self.linear_publisher.publish(linear_msg)
+        #         start = time.time()
+        #         while (time.time() - start < 0.2) \
+        #             and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
+        #             and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
+        #             pass
+                
+        #         linear_msg.data = 0
+        #         self.linear_publisher.publish(linear_msg)
+
+        #         # get rid of point that is too close to wall in the first place and take the next one
+        #         # cannot take final one if its like thru a wall
+        #         self.dest_x.clear()
+        #         self.dest_y.clear()
+                
+        #         self.get_logger().warn(
+        #             '[maze_moving]: get back to magicState: %s' % self.magicState)
+        #         self.state = self.magicState
+        #         return
 
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
@@ -703,8 +774,10 @@ class MasterNode(Node):
                 return
 
             # if obstacle in front and close to both sides, rotate to move between the two
-            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) or any(
-                    self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE):
+            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+                    or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])):
                 self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
 
                 # set linear to be zero
@@ -717,11 +790,13 @@ class MasterNode(Node):
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
-                # move backward for 1 sec
+                # move backward for 0.2 sec as long as butt has space
                 linear_msg.data = -self.linear_speed
                 self.linear_publisher.publish(linear_msg)
                 start = time.time()
-                while time.time() - start < 1:
+                while (time.time() - start < 0.2) \
+                    and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
+                    and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
                     pass
                 
                 linear_msg.data = 0
@@ -1450,7 +1525,7 @@ class MasterNode(Node):
                 for x in range(self.map_w):
                     for d in range(len(self.dx)):
                         for i in [1, -1]:
-                            self.d_data[iter] = 5
+                            self.d_data[iter] = 3
                             iter += 1
                         ny = y + self.dy[d]
                         nx = x + self.dx[d]
@@ -1469,7 +1544,7 @@ class MasterNode(Node):
                         for i in [1, -1]:
                             row.append(self.toId(y, x, d))
                             col.append(self.toId(y, x, (d + i) % 4))
-                            data.append(5)
+                            data.append(3)
                         ny = y + self.dy[d]
                         nx = x + self.dx[d]
                         if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
