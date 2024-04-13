@@ -19,7 +19,7 @@ from skimage.morphology import dilation, disk
 from functools import cmp_to_key
 
 from scipy.ndimage import generic_filter
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix 
 from scipy.sparse.csgraph import dijkstra
 
 import time
@@ -33,13 +33,13 @@ occ_bins = [-1, 0, 55, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 10
+CLEARANCE_RADIUS = 5
 
 # this is in pixel
 # FRONTIER_THRESHOLD = 4
 FRONTIER_THRESHOLD = 2
 # PIXEL_DEST_THRES = 2
-PIXEL_DEST_THRES = 2
+PIXEL_DEST_THRES = 3
 
 NAV_TOO_CLOSE = 0.23
 BUTT_TOO_CLOSE = 0.10
@@ -96,8 +96,8 @@ FRONTIER_DIST_M = 0.10
 WAIT_FRONTIER = 10
 
 # speedssss
-LIN_MAX = 120
-LIN_WHEN_ROTATING = 120
+LIN_MAX = 110
+LIN_WHEN_ROTATING = 50
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -185,6 +185,8 @@ class MasterNode(Node):
         self.bucketAngle_subscription  # prevent unused variable warning
 
         self.bucketAngle = 0
+        
+        self.bucketArray = [0, 0, 0, 0, 0]
 
         ''' ================================================ occupancy map ================================================ '''
         # Create a subscriber to the topic "map"
@@ -382,8 +384,22 @@ class MasterNode(Node):
         self.mazeFrontRightindex = self.angle_to_index(MAZE_FRONT_RIGHT_ANGLE, self.range_len)
 
     def bucketAngle_listener_callback(self, msg):
+        # # only update if everything is far away enough, this acts as a filter to prevent wrong angle when its too close to te bucket
+        
+        # if any(self.laser_range < BUCKET_TOO_CLOSE):
+        #     self.get_logger().info('too close, bucket angle not updated')
+        #     return
+        # else:
+        #     # shift down values and add newest to front
+        #     self.bucketArray = [msg.data] + self.bucketArray[:-1]
+            
+        #     # medium of 5 values
+        #     self.bucketAngle = np.median([msg.data])      
+            
+        #     self.get_logger().info('updated self.bucketAngle to %s' % str(self.bucketAngle))
+        
         self.bucketAngle = msg.data
-
+            
     def occ_callback(self, msg):
         occTime = time.time()
         self.get_logger().info('[occ_callback]: new occ map!')
@@ -627,6 +643,9 @@ class MasterNode(Node):
                 boolCurve_msg = Int8()
                 boolCurve_msg.data = 1
                 self.boolCurve_publisher.publish(boolCurve_msg)
+                
+                self.disableOCC = True
+                
         else:
             mode, tx, ty = map(int, self.state.split())
             if mode == 0:
@@ -674,6 +693,7 @@ class MasterNode(Node):
             
         self.get_logger().info('[masterFSM]: self.state: %s, self.magicState %s' % (self.state, self.magicState))
 
+        # if no more frontier and its in frontier search means done and go to wait_for_frontier
         if self.magicState == "frontier_search" and self.frontierPoints == []:
             self.get_logger().info('[masterFSM]: no more frontier points go to wait_for_frontier')
             self.state = self.magicState = "wait_for_frontier"
@@ -688,6 +708,11 @@ class MasterNode(Node):
             deltaAngle_msg = Float64()
             deltaAngle_msg.data = 0.0
             self.deltaAngle_publisher.publish(deltaAngle_msg)
+            
+        # if finding hallway but cutting through wall, and frontier pops up, then go back to frontier search
+        if self.magicState == "move_to_hallway" and self.frontierPoints != []:
+            self.get_logger().info('[masterFSM]: frontier points found while moving to hallway, go back to frontier search')
+            self.state = self.magicState = "frontier_search"
                 
         listStateIgnoreForObstacle = ["idle", 
                                       "checking_walls_distance",
@@ -1070,6 +1095,12 @@ class MasterNode(Node):
             if time.time() - self.lastWaitForFrontier > WAIT_FRONTIER:
                 self.get_logger().info('[wait_for_frontier]: time is up go to move_to_hallway')
                 self.state = self.magicState = "move_to_hallway"
+                
+                # enable occCallback
+                self.disableOCC = False
+                
+                # set newOccFlag to False
+                self.newOccFlag = False
                 return
             
         elif self.state == "move_to_hallway":
@@ -1124,6 +1155,12 @@ class MasterNode(Node):
                 # if nav works
                 self.state = self.magicState = "go_to_left_door"
                 
+                # enable occCallback
+                self.disableOCC = False
+                
+                # set newOccFlag to False
+                self.newOccFlag = False
+                
                 # if nav is still not working, put bot at centre of both door facing right door and start http_request
                 # self.state = self.magicState = "rotate_to_left_door"
 
@@ -1131,6 +1168,12 @@ class MasterNode(Node):
                 self.get_logger().info('[http_request]: door2 opened')
                 # if nav works
                 self.state = self.magicState = "go_to_right_door"
+                
+                # enable occCallback
+                self.disableOCC = False
+                
+                # set newOccFlag to False
+                self.newOccFlag = False
                 
                 # if nav is still not working, put bot at centre of both door facing right door and start http_request
                 # self.state = self.magicState = "rotate_to_right_door"
@@ -1366,8 +1409,28 @@ class MasterNode(Node):
                 # move until the back is more than 40 cm or stop if the front is less than 30 cm
                 # 40cm must be more than the 30cm from smallest distance, so that it wont rotate and get diff distance, lidar is not the center of rotation
                 # must use any not all incase of NaN
-                if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(
-                        self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE):
+
+                # if front and butt not clear, rotate to left or right with the most space, then pass back to rotating_to_move_away_from_walls
+                # if front is not clear, stop and pass to checking_walls_distance to rotate away from closest object
+                # if butt is not clear, keep going forwad until clear then pass to checking_walls_distance to check again
+                frontNotClear = any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)
+                buttNotClear = any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10)
+                
+                if frontNotClear and buttNotClear:
+                    self.get_logger().info('[rotating_to_move_away_from_walls]: front and butt got somthing')
+                    
+                    if np.nanmean(self.laser_range[self.leftIndexL:self.leftIndexH]) > np.nanmean(self.laser_range[self.rightIndexL:self.rightIndexH]):
+                        self.get_logger().info('[rotating_to_move_away_from_walls]: rotate to left')
+                        deltaAngle_msg = Float64()
+                        deltaAngle_msg.data = 90.0
+                        self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    else:
+                        self.get_logger().info('[rotating_to_move_away_from_walls]: rotate to right')
+                        deltaAngle_msg = Float64()
+                        deltaAngle_msg.data = -90.0
+                        self.deltaAngle_publisher.publish(deltaAngle_msg)
+                   
+                elif frontNotClear:
                     # infront got something
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
 
@@ -1386,7 +1449,7 @@ class MasterNode(Node):
                 else:
                     self.get_logger().info('[rotating_to_move_away_from_walls]: front is still clear! go forward')
 
-                    if any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10):
+                    if buttNotClear:
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
 
                         # set linear to be self.linear_speed to move forward fastest
@@ -1399,10 +1462,10 @@ class MasterNode(Node):
                         # elif right got something, rotate left
                         # else go straight
                         if all(self.laser_range[self.leftIndexL:self.leftIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = -LIN_MAX
+                            anglularVel_msg.data = -127
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and right')
                         elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = LIN_MAX
+                            anglularVel_msg.data = 127
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and left')
                         else:
                             anglularVel_msg.data = 0
@@ -1425,6 +1488,162 @@ class MasterNode(Node):
                         # send back to checking_walls_distance to check for all distance again
                         self.state = self.magicState = "checking_walls_distance"
 
+        # elif self.state == "rotating_to_bucket":
+        #     # if close to forward, go to next state, else align to bucket first
+        #     if abs(self.bucketAngle) < 2:
+        #         self.get_logger().info('[rotating_to_bucket]: close enough, moving to bucket now')
+        #         self.state = self.magicState = "moving_to_bucket"
+        #     else:
+        #         self.get_logger().info('[rotating_to_bucket]: rotating to face bucket')
+
+        #         if self.bucketAngle < 180:
+        #             # set linear to be zero
+        #             self.linear_msg.data = 0
+        #             self.linear_publisher.publish(self.linear_msg)
+
+        #             # set delta angle = bucketAngle
+        #             deltaAngle_msg = Float64()
+        #             deltaAngle_msg.data = self.bucketAngle * 1.0  # to change int to float type
+        #             self.deltaAngle_publisher.publish(deltaAngle_msg)
+        #         elif self.bucketAngle > 180:
+        #             # set linear to be zero
+        #             self.linear_msg.data = 0
+        #             self.linear_publisher.publish(self.linear_msg)
+
+        #             # set delta angle = bucketAngle -360
+        #             deltaAngle_msg = Float64()
+        #             deltaAngle_msg.data = self.bucketAngle - 360.0  # to change int to float type
+        #             self.deltaAngle_publisher.publish(deltaAngle_msg)
+        #         else:
+        #             # the case where it is 180, turn 90 deg first
+        #             # set linear to be zero
+        #             self.linear_msg.data = 0
+        #             self.linear_publisher.publish(self.linear_msg)
+
+        #             # set delta angle = 90
+        #             deltaAngle_msg = Float64()
+        #             deltaAngle_msg.data = 90.0
+        #             self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+        #         # send to moving_to_bucket to wait for rotation to finish
+        #         self.state = self.magicState = "moving_to_bucket"
+
+        #         # on limit switch
+        #         switch_msg = String()
+        #         switch_msg.data = "activate"
+        #         self.switch_publisher.publish(switch_msg)
+        # elif self.state == "moving_to_bucket":
+        #     # if still rotating wait, else can move forward until hit bucket
+        #     if self.robotControlNodeState == "rotateByAngle":
+        #         self.get_logger().info('[moving_to_bucket]: still rotating, waiting')
+        #         pass
+        #     else:
+        #         # set linear to be self.linear_speed to move forward fastest
+        #         self.linear_msg.data = LIN_MAX
+        #         self.linear_publisher.publish(self.linear_msg)
+
+        #         # if the bucket is in the to the right, turn left slightly
+        #         anglularVel_msg = Int8()
+                
+        #         # if infront ish, so angle to change is small, can move forward while turning
+        #         # else throw back to checking_walls_distance
+        #         # if 5 < self.bucketAngle < 45:
+        #         #     anglularVel_msg.data = 100
+        #         #     self.get_logger().info('[moving_to_bucket]: moving forward and left')
+        #         # elif 315 < self.bucketAngle < 355:
+        #         #     anglularVel_msg.data = -100
+        #         #     self.get_logger().info('[moving_to_bucket]: moving forward and right')
+        #         # elif 45 <= self.bucketAngle <= 315:
+        #         #     self.get_logger().info('[moving_to_bucket]: go back checking_walls_distance, self.bucketAngle = %f' % self.bucketAngle)
+        #         #     self.state = self.magicState = "checking_walls_distance"    
+        #         # else:
+        #         #     anglularVel_msg.data = 0
+        #         #     self.get_logger().info('[moving_to_bucket]: moving forward')
+                
+        #         if self.bucketAngle > 5 and self.bucketAngle < 180:
+        #             anglularVel_msg.data = 100
+        #             self.get_logger().info('[moving_to_bucket]: moving forward and left')
+        #         elif self.bucketAngle < 355 and self.bucketAngle > 180:
+        #             anglularVel_msg.data = -100
+        #             self.get_logger().info('[moving_to_bucket]: moving forward and right')
+        #         else:
+        #             anglularVel_msg.data = 0
+        #             self.get_logger().info('[moving_to_bucket]: moving forward')
+
+        #         self.anglularVel_publisher.publish(anglularVel_msg)
+
+        #         # if the bucket is hit, the state transition and stopping will be done by the switch_listener_callback
+        #     pass
+        
+        # elif self.state == "rotating_to_move_away_from_walls":
+        #     # if still rotating wait, else can move forward until the back is 30 cm away
+        #     if self.robotControlNodeState == "rotateByAngle":
+        #         self.get_logger().info('[rotating_to_move_away_from_walls]: still rotating, waiting')
+        #         pass
+        #     else:
+        #         # get the index of the front left, front right, back, left, right
+        #         # move until the back is more than 40 cm or stop if the front is less than 30 cm
+        #         # 40cm must be more than the 30cm from smallest distance, so that it wont rotate and get diff distance, lidar is not the center of rotation
+        #         # must use any not all incase of NaN
+        #         if any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(
+        #                 self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE):
+        #             # infront got something
+        #             self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
+
+        #             # set linear to be zero
+        #             self.linear_msg.data = 0
+        #             self.linear_publisher.publish(self.linear_msg)
+
+        #             # set delta angle = 0 to stop
+        #             deltaAngle_msg = Float64()
+        #             deltaAngle_msg.data = 0.0
+        #             self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+        #             # send back to checking_walls_distance to check for all distance again
+        #             self.state = self.magicState = "checking_walls_distance"
+
+        #         else:
+        #             self.get_logger().info('[rotating_to_move_away_from_walls]: front is still clear! go forward')
+
+        #             if any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10):
+        #                 self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
+
+        #                 # set linear to be self.linear_speed to move forward fastest
+        #                 self.linear_msg.data = LIN_MAX
+        #                 self.linear_publisher.publish(self.linear_msg)
+
+        #                 anglularVel_msg = Int8()
+
+        #                 # if left got something, rotate right
+        #                 # elif right got something, rotate left
+        #                 # else go straight
+        #                 if all(self.laser_range[self.leftIndexL:self.leftIndexH] < BUCKET_TOO_CLOSE):
+        #                     anglularVel_msg.data = -LIN_MAX
+        #                     self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and right')
+        #                 elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < BUCKET_TOO_CLOSE):
+        #                     anglularVel_msg.data = LIN_MAX
+        #                     self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and left')
+        #                 else:
+        #                     anglularVel_msg.data = 0
+        #                     self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward')
+
+        #                 self.anglularVel_publisher.publish(anglularVel_msg)
+        #             else:
+        #                 # moved far enough
+        #                 self.get_logger().info('[rotating_to_move_away_from_walls]: moved far enough, butt is clear')
+
+        #                 # set linear to be zero
+        #                 self.linear_msg.data = 0
+        #                 self.linear_publisher.publish(self.linear_msg)
+
+        #                 # set delta angle = 0 to stop
+        #                 deltaAngle_msg = Float64()
+        #                 deltaAngle_msg.data = 0.0
+        #                 self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+        #                 # send back to checking_walls_distance to check for all distance again
+        #                 self.state = self.magicState = "checking_walls_distance"
+
         elif self.state == "rotating_to_bucket":
             # if close to forward, go to next state, else align to bucket first
             if abs(self.bucketAngle) < 2:
@@ -1442,6 +1661,9 @@ class MasterNode(Node):
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data = self.bucketAngle * 1.0  # to change int to float type
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    
+                    self.get_logger().info('[rotating_to_bucket]: rotating self.bucketAngle = %f' % self.bucketAngle)
+                    
                 elif self.bucketAngle > 180:
                     # set linear to be zero
                     self.linear_msg.data = 0
@@ -1451,15 +1673,17 @@ class MasterNode(Node):
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data = self.bucketAngle - 360.0  # to change int to float type
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    
+                    self.get_logger().info('[rotating_to_bucket]: rotating self.bucketAngle = %f' % self.bucketAngle)
                 else:
-                    # the case where it is 180, turn 90 deg first
+                    # the case where it is 180, turn 179 deg
                     # set linear to be zero
                     self.linear_msg.data = 0
                     self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle = 90
                     deltaAngle_msg = Float64()
-                    deltaAngle_msg.data = 90.0
+                    deltaAngle_msg.data = 179.0
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
                 # send to moving_to_bucket to wait for rotation to finish
@@ -1480,6 +1704,7 @@ class MasterNode(Node):
                 self.linear_publisher.publish(self.linear_msg)
 
                 # if the bucket is in the to the right, turn left slightly
+                anglularVel_msg = Int8()
 
                 if self.bucketAngle > 5 and self.bucketAngle < 180:
                     anglularVel_msg.data = 100
@@ -1687,7 +1912,7 @@ class MasterNode(Node):
         
         # if deltaAngle is too big, stop then rotate
         # else, rotate and move at the same time
-        if abs(target_yaw - self.yaw) >= 90:
+        if abs(target_yaw - self.yaw) >= 45:
             # set linear
             self.linear_msg.data = 0
             self.linear_publisher.publish(self.linear_msg)
