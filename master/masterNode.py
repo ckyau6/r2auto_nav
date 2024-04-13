@@ -201,6 +201,19 @@ class MasterNode(Node):
         self.finishLine_Ypixel = 0
         
         self.disableOCC = False
+        
+        self.newOccFlag = False
+        
+        # the only ways for occ to be enabled and newOccFlag to be set to False are:
+        #   too close to wall
+        #   path is finished (this is only in maze_moving. move_to_hallway, go_to_left_door, go_to_right_door uses maze_moving)
+        
+        
+        # occ is disabled after one new map is received and newOccFlag set to true
+        
+        # in maze_moving, if occ is enabled but newOccFlag is false, then it will wait until newOccFlag is true
+        
+        # after entering room, occ is disabled and will not turn back on until reach back idle
 
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
@@ -365,32 +378,41 @@ class MasterNode(Node):
         self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
-        
+        occTime = time.time()
+        self.get_logger().info('[occ_callback]: new occ map!')
+
+        self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
+        self.map_w = msg.info.width
+        self.map_h = msg.info.height
+        self.map_origin_x = msg.info.origin.position.x
+        self.map_origin_y = msg.info.origin.position.y
+
+        # this gives the locations of bot in the occupancy map, in pixel
+        self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
+        self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
+
+        # this gives the locations of magic origin in the occupancy map, in pixel
+        self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
+        self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
+        self.magicOriginx_pixel += self.offset_x
+        self.magicOriginy_pixel += self.offset_y
+
+        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
+        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+        self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+
         if self.disableOCC == False:
-            occTime = time.time()
-            self.get_logger().info('[occ_callback]: new occ map!')
-
-            self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
-            self.map_w = msg.info.width
-            self.map_h = msg.info.height
-            self.map_origin_x = msg.info.origin.position.x
-            self.map_origin_y = msg.info.origin.position.y
-
-            # this gives the locations of bot in the occupancy map, in pixel
-            self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
-            self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
-
-            # this gives the locations of magic origin in the occupancy map, in pixel
-            self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
-            self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
-            self.magicOriginx_pixel += self.offset_x
-            self.magicOriginy_pixel += self.offset_y
-
-            # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
-            self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-            self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-            self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-
+            self.get_logger().info('[occ_callback]: occ enabled')
+            
+            # disable occCallback
+            self.disableOCC = True
+            
+            # set newOccFlag to True
+            self.newOccFlag = True
+            
+            self.get_logger().info('[occ_callback]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
+            
             # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
             #
             # TEMPPP
@@ -558,7 +580,7 @@ class MasterNode(Node):
 
             timeTaken = time.time() - occTime
             self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
-
+            
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
         self.pos_x = msg.position.x
@@ -752,7 +774,15 @@ class MasterNode(Node):
                 self.get_logger().warn(
                     '[masterFSM]: get back to magicState: %s' % self.magicState)
                 self.state = self.magicState
-
+                
+                # enable occCallback
+                self.disableOCC = False
+                
+                # set newOccFlag to False
+                self.newOccFlag = False
+                
+                self.get_logger().info('[masterFSM]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
+                
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
             servoAngle_msg = UInt8()
@@ -779,8 +809,9 @@ class MasterNode(Node):
             boolCurve_msg.data = 0
             self.boolCurve_publisher.publish(boolCurve_msg)
             
-            # reset to not disable OCC callback
+            # reset to not disable OCC callback and newOccFlag
             self.disableOCC = False
+            self.newOccFlag = False
 
         elif self.state == "maze_rotating":
              # self.get_logger().info('current yaw: %f' % self.yaw)
@@ -804,6 +835,13 @@ class MasterNode(Node):
                 # reset recalc_stat
                 self.recalc_stat = 0
         elif self.state == "maze_moving":
+            # in maze_moving, if occ is enabled but newOccFlag is false, then it will wait until newOccFlag is true
+            if self.newOccFlag == False and self.disableOCC == False:
+                self.get_logger().info('[maze_moving]: waiting for new occ map, newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
+                return
+            else:
+                self.get_logger().info('[maze_moving]: new occ map received can run')
+                
             # if reached the destination (within one pixel), stop and move to the next destination
             self.get_logger().info('[maze_moving]: moving')
 
@@ -826,7 +864,16 @@ class MasterNode(Node):
 
                 if len(self.dest_x) == 0:
                     self.get_logger().info(
-                        '[maze_moving]: no more destination; get back to magicState: %s' % self.magicState)
+                        '[maze_moving]: no more destination; get back to magicState: %s and enable occCallback' % self.magicState)
+                    
+                    # enable occCallback
+                    self.disableOCC = False
+                    
+                    # set newOccFlag to False
+                    self.newOccFlag = False
+                    
+                    self.get_logger().info('[maze_moving]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
+                    
                     self.state = self.magicState
                 else:
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
@@ -993,8 +1040,11 @@ class MasterNode(Node):
                 return
             
         elif self.state == "move_to_hallway":
-            if abs(self.botx_pixel - self.finishLine_pixel[0]) <= PIXEL_DEST_THRES and abs(
-                    self.boty_pixel - self.finishLine_pixel[1]) <= PIXEL_DEST_THRES:
+            # if reached hallway or is already in hall way, stop and start http_request
+            if (abs(self.botx_pixel - self.finishLine_pixel[0]) <= PIXEL_DEST_THRES and abs(
+                    self.boty_pixel - self.finishLine_pixel[1]) <= PIXEL_DEST_THRES) \
+                or \
+                (self.boty_pixel >= self.finishLine_pixel[1]):
                 
                 # set linear to be zero
                 linear_msg = Int8()
@@ -1010,7 +1060,7 @@ class MasterNode(Node):
             
                 # set magicState to be http_request, so that once at hall way point, it will open the door
                 self.state = self.magicState = "http_request"
-                
+                                
                 return
                 
             # check if hallway is even in map, if its not, means frontier has not been fully explored, go back to frontier search
@@ -1080,7 +1130,7 @@ class MasterNode(Node):
             
                 # set magicState to be rotate_to_left_door, so that once at door, it will rotate_to_left_door
                 self.state = self.magicState = "rotate_to_left_door"
-                
+                            
                 return
             
             # check if left door is reachable
@@ -1110,7 +1160,7 @@ class MasterNode(Node):
             
                 # set magicState to be rotate_to_right_door, so that once at door, it will rotate_to_right_door
                 self.state = self.magicState = "rotate_to_right_door"
-                
+          
                 return
             
             # check if left door is reachable
@@ -1206,6 +1256,8 @@ class MasterNode(Node):
                 # disable OCC callbacks since after entering it will not be used
                 self.disableOCC = True
                 
+                self.get_logger().info('[enter_to_left_door]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
+                
                 # # temp
                 # self.state = self.magicState = "idle"
             
@@ -1244,6 +1296,8 @@ class MasterNode(Node):
                 
                 # disable OCC callbacks since after entering it will not be used
                 self.disableOCC = True
+                
+                self.get_logger().info('[enter_to_right_door]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
                 
                 # # temp
                 # self.state = self.magicState = "idle"
