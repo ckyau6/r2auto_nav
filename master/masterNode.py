@@ -715,8 +715,10 @@ class MasterNode(Node):
             self.state = self.magicState = "frontier_search"
                 
         listStateIgnoreForObstacle = ["idle", 
+                                    #   "enter_to_left_door",
+                                    #   "enter_to_right_door",
                                       "checking_walls_distance",
-                                      "rotating_to_move_away_from_walls"
+                                      "rotating_to_move_away_from_walls",
                                       "rotating_to_bucket",
                                       "moving_to_bucket",
                                       "releasing",
@@ -848,12 +850,7 @@ class MasterNode(Node):
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
 
-            # # set boolCurve to 0
-            # boolCurve_msg = Int8()
-            # boolCurve_msg.data = 0
-            # self.boolCurve_publisher.publish(boolCurve_msg)
-            
-            # set boolCurve to 1, testing
+            # set boolCurve to 1
             boolCurve_msg = Int8()
             boolCurve_msg.data = 1
             self.boolCurve_publisher.publish(boolCurve_msg)
@@ -1129,9 +1126,18 @@ class MasterNode(Node):
             # check if hallway is even in map, if its not, means frontier has not been fully explored, go back to frontier search
             # froniter search changes as confidence in map changes hence sometime when there is no more frontier, but after some time, there is more
             if self.finishLine_pixel[0] < 0 or self.finishLine_pixel[1] < 0 or self.finishLine_pixel[0] >= self.map_w or self.finishLine_pixel[1] >= self.map_h:
-                self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable is not in map' % (self.finishLine_pixel[0], self.finishLine_pixel[1]))
-                
                 self.state = self.magicState = "frontier_search"
+                
+                FRONTIER_SKIP_THRESHOLD = FRONTIER_SKIP_THRESHOLD * 0.9
+                
+                # enable occCallback
+                self.disableOCC = False
+                
+                # set newOccFlag to False
+                self.newOccFlag = False
+                
+                self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable is not in map, FRONTIER_SKIP_THRESHOLD = %f' % (self.finishLine_pixel[0], self.finishLine_pixel[1], FRONTIER_SKIP_THRESHOLD))
+                
             else:
                 # check if hall way is reachable
                 # if not reachable, throw error (or do somthing else)
@@ -1700,21 +1706,27 @@ class MasterNode(Node):
                 pass
             else:
                 # set linear to be self.linear_speed to move forward fastest
-                self.linear_msg.data = LIN_MAX
+                self.linear_msg.data = 75
                 self.linear_publisher.publish(self.linear_msg)
 
                 # if the bucket is in the to the right, turn left slightly
                 anglularVel_msg = Int8()
-
-                if self.bucketAngle > 5 and self.bucketAngle < 180:
-                    anglularVel_msg.data = 100
-                    self.get_logger().info('[moving_to_bucket]: moving forward and left')
-                elif self.bucketAngle < 355 and self.bucketAngle > 180:
-                    anglularVel_msg.data = -100
-                    self.get_logger().info('[moving_to_bucket]: moving forward and right')
-                else:
+                
+                # bucket angle becomes unreliable at close range so if the bucket is close enough, just go straight
+                
+                if any(self.laser_range[0:self.bucketFrontLeftIndex] < 0.30) or any(self.laser_range[self.bucketFrontRightIndex:] < 0.30):
                     anglularVel_msg.data = 0
-                    self.get_logger().info('[moving_to_bucket]: moving forward')
+                    self.get_logger().info('[moving_to_bucket]: too close, just moving forward')
+                else:
+                    if self.bucketAngle > 5 and self.bucketAngle < 180:
+                        anglularVel_msg.data = 100
+                        self.get_logger().info('[moving_to_bucket]: moving forward and left')
+                    elif self.bucketAngle < 355 and self.bucketAngle > 180:
+                        anglularVel_msg.data = -100
+                        self.get_logger().info('[moving_to_bucket]: moving forward and right')
+                    else:
+                        anglularVel_msg.data = 0
+                        self.get_logger().info('[moving_to_bucket]: moving forward')
 
                 self.anglularVel_publisher.publish(anglularVel_msg)
 
