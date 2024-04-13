@@ -41,7 +41,7 @@ FRONTIER_THRESHOLD = 2
 # PIXEL_DEST_THRES = 2
 PIXEL_DEST_THRES = 2
 
-NAV_TOO_CLOSE = 0.26
+NAV_TOO_CLOSE = 0.23
 BUTT_TOO_CLOSE = 0.10
 
 BUCKET_TOO_CLOSE = 0.30
@@ -94,6 +94,10 @@ FRONTIER_DIST_M = 0.10
 
 # time in s to wait after no more frontier before goin to hall way
 WAIT_FRONTIER = 10
+
+# speedssss
+LIN_MAX = 120
+LIN_WHEN_ROTATING = 120
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -211,7 +215,8 @@ class MasterNode(Node):
         
         # occ is disabled after one new map is received and newOccFlag set to true
         
-        # in maze_moving, if occ is enabled but newOccFlag is false, then it will wait until newOccFlag is true
+        # if occ is enabled but newOccFlag is false, then it will wait until newOccFlag is true
+        # this is needed for all states that uses occ map, so the check is right before FSM
         
         # after entering room, occ is disabled and will not turn back on until reach back idle
 
@@ -243,6 +248,9 @@ class MasterNode(Node):
             'robotControlNode_state_feedback',
             self.robotControlNode_state_feedback_callback,
             10)
+        
+        # make this global so can be used to check moving or not
+        self.linear_msg = Int8()
 
         ''' ================================================ boolCurve ================================================ '''
         # Create a publisher to the topic "boolCurve", which can changing bool for curve the robot
@@ -271,7 +279,7 @@ class MasterNode(Node):
         self.get_logger().info("MasterNode has started, bitchesss! >:D")
 
         # constants
-        self.linear_speed = 100
+        # self.linear_speed = 100
         # self.yaw_offset = 0
         self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
@@ -326,9 +334,8 @@ class MasterNode(Node):
             self.state = self.magicState = "releasing"
 
             # set linear to be zero
-            linear_msg = Int8()
-            linear_msg.data = 0
-            self.linear_publisher.publish(linear_msg)
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
 
             # set delta angle = 0 to stop
             deltaAngle_msg = Float64()
@@ -513,9 +520,8 @@ class MasterNode(Node):
                 
                 if self.magicState == "frontier_search" and self.dist[self.dest_y[-1] + self.offset_y][self.dest_x[-1] + self.offset_x] > FRONTIER_SKIP_THRESHOLD:
                     # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle = 0 to stop
                     deltaAngle_msg = Float64()
@@ -538,9 +544,8 @@ class MasterNode(Node):
 
                 if len(new_dest_x) == 0:
                     # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle = 0 to stop
                     deltaAngle_msg = Float64()
@@ -564,9 +569,8 @@ class MasterNode(Node):
                     # if the first target point changes, stop once and move again
                     if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
                         # set linear to be zero
-                        linear_msg = Int8()
-                        linear_msg.data = 0
-                        self.linear_publisher.publish(linear_msg)
+                        self.linear_msg.data = 0
+                        self.linear_publisher.publish(self.linear_msg)
 
                         # set delta angle = 0 to stop
                         deltaAngle_msg = Float64()
@@ -644,9 +648,8 @@ class MasterNode(Node):
 
     def custom_destroy_node(self):
         # set linear to be zero
-        linear_msg = Int8()
-        linear_msg.data = 0
-        self.linear_publisher.publish(linear_msg)
+        self.linear_msg.data = 0
+        self.linear_publisher.publish(self.linear_msg)
 
         # set delta angle = 0 to stop
         deltaAngle_msg = Float64()
@@ -678,9 +681,8 @@ class MasterNode(Node):
             
             # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
             # set linear to be zero
-            linear_msg = Int8()
-            linear_msg.data = 0
-            self.linear_publisher.publish(linear_msg)
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
 
             # set delta angle = 0 to stop
             deltaAngle_msg = Float64()
@@ -693,10 +695,12 @@ class MasterNode(Node):
                                       "rotating_to_bucket",
                                       "moving_to_bucket",
                                       "releasing",
-                                      "maze_rotating",
                                       ]
                 
-        if self.state not in listStateIgnoreForObstacle:
+        # special case for maze_rotating
+        # if moving then need to check for obstacle, else rotate on spot no need to check
+        if (self.state not in listStateIgnoreForObstacle) or (self.state == "maze_rotating" and self.linear_msg.data != 0):
+            
             # if obstacle in front and close to both sides, rotate to move between the two
             if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
                     or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
@@ -705,9 +709,8 @@ class MasterNode(Node):
                 self.get_logger().warn('[masterFSM]: ahhh wall to close to front uwu')
 
                 # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -715,16 +718,16 @@ class MasterNode(Node):
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
                 # move backward for 0.5 sec as long as butt has space
-                linear_msg.data = -self.linear_speed
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = -LIN_MAX
+                self.linear_publisher.publish(self.linear_msg)
                 start = time.time()
                 while (time.time() - start < 0.3) \
                     and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
                     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
                     pass
                 
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
                 
                 anglularVel_msg = Int8()
                 
@@ -737,9 +740,8 @@ class MasterNode(Node):
 
                     self.get_logger().info('[masterFSM]: align to next dest: %f' % deltaAngle)
 
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle to rotate to target angle
                     deltaAngle_msg = Float64()
@@ -783,6 +785,24 @@ class MasterNode(Node):
                 
                 self.get_logger().info('[masterFSM]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
                 
+        # if occ is enabled, means new values are wanted
+        # so if newOccFlag is false, then need to wait until newOccFlag is true before procedding with whatever state it is in
+        if self.newOccFlag == False and self.disableOCC == False:
+            self.get_logger().info('[masterFSM]: waiting for new occ map, newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
+            
+            # set linear to be zero
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
+
+            # set delta angle = 0 to stop
+            deltaAngle_msg = Float64()
+            deltaAngle_msg.data = 0.0
+            self.deltaAngle_publisher.publish(deltaAngle_msg)
+            
+            return
+        else:
+            self.get_logger().info('[masterFSM]: new occ map received can run')
+                
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
             servoAngle_msg = UInt8()
@@ -790,9 +810,8 @@ class MasterNode(Node):
             self.servo_publisher.publish(servoAngle_msg)
 
             # set linear to be zero
-            linear_msg = Int8()
-            linear_msg.data = 0
-            self.linear_publisher.publish(linear_msg)
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
 
             # set delta angle = 0 to stop
             deltaAngle_msg = Float64()
@@ -804,9 +823,14 @@ class MasterNode(Node):
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
 
-            # set boolCurve to 0
+            # # set boolCurve to 0
+            # boolCurve_msg = Int8()
+            # boolCurve_msg.data = 0
+            # self.boolCurve_publisher.publish(boolCurve_msg)
+            
+            # set boolCurve to 1, testing
             boolCurve_msg = Int8()
-            boolCurve_msg.data = 0
+            boolCurve_msg.data = 1
             self.boolCurve_publisher.publish(boolCurve_msg)
             
             # reset to not disable OCC callback and newOccFlag
@@ -826,43 +850,35 @@ class MasterNode(Node):
                     return
                 
                 # set linear to start moving forward
-                linear_msg = Int8()
-                linear_msg.data = self.linear_speed
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = LIN_MAX
+                self.linear_publisher.publish(self.linear_msg)
                 
                 self.state = "maze_moving"
                 
                 # reset recalc_stat
                 self.recalc_stat = 0
-        elif self.state == "maze_moving":
-            # in maze_moving, if occ is enabled but newOccFlag is false, then it will wait until newOccFlag is true
-            if self.newOccFlag == False and self.disableOCC == False:
-                self.get_logger().info('[maze_moving]: waiting for new occ map, newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
-                return
-            else:
-                self.get_logger().info('[maze_moving]: new occ map received can run')
-                
+        elif self.state == "maze_moving":                
             # if reached the destination (within one pixel), stop and move to the next destination
             self.get_logger().info('[maze_moving]: moving')
 
             if abs(self.botx_pixel - self.dest_x[0]) <= PIXEL_DEST_THRES and abs(
                     self.boty_pixel - self.dest_y[0]) <= PIXEL_DEST_THRES:
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
-
-                # set delta angle = 0 to stop
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
-
+                
                 self.get_logger().info('[maze_moving]: finished moving')
 
                 self.dest_x = self.dest_x[1:]
                 self.dest_y = self.dest_y[1:]
 
                 if len(self.dest_x) == 0:
+                    # set linear to be zero
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
+
+                    # set delta angle = 0 to stop
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = 0.0
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    
                     self.get_logger().info(
                         '[maze_moving]: no more destination; get back to magicState: %s and enable occCallback' % self.magicState)
                     
@@ -876,6 +892,7 @@ class MasterNode(Node):
                     
                     self.state = self.magicState
                 else:
+                    # this will aim to next point
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
 
@@ -952,12 +969,17 @@ class MasterNode(Node):
                 deltaAngle = target_yaw - self.yaw
 
                 self.get_logger().info('[maze_moving]: front open, reallign with deltaAngle: %f' % deltaAngle)
-
-                if abs(deltaAngle) >= 15:
-                    # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                
+                
+                # if deltaAnfle is too small, just ignore
+                # if deltaAngle is too big, stop then rotate
+                # else, rotate and move at the same time
+                if abs(deltaAngle) < 15:
+                    pass
+                elif abs(deltaAngle) >= 90:
+                    # set linear
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle to rotate to target angle
                     deltaAngle_msg = Float64()
@@ -965,7 +987,18 @@ class MasterNode(Node):
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
                     self.state = "maze_rotating"
+                else:
+                    # set linear
+                    self.linear_msg.data = LIN_WHEN_ROTATING
+                    self.linear_publisher.publish(self.linear_msg)
 
+                    # set delta angle to rotate to target angle
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = deltaAngle * 1.0
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                    self.state = "maze_rotating"
+                
         # elif self.state == "escape_wall_lmao":
         #     # dequeue all bullshit in dest
         #     self.dest_x = []
@@ -1047,9 +1080,8 @@ class MasterNode(Node):
                 (self.boty_pixel >= self.finishLine_pixel[1]):
                 
                 # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -1117,9 +1149,8 @@ class MasterNode(Node):
                     self.boty_pixel - self.leftDoor_pixel[1]) <= PIXEL_DEST_THRES:
                 
                 # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -1147,9 +1178,8 @@ class MasterNode(Node):
                     self.boty_pixel - self.rightDoor_pixel[1]) <= PIXEL_DEST_THRES:
                 
                 # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -1175,9 +1205,8 @@ class MasterNode(Node):
         elif self.state == "rotate_to_left_door":
             # this assume that the robot is started straight and door is perpendicular to the robot starting yaw
             # set linear to be zero
-            linear_msg = Int8()
-            linear_msg.data = 0
-            self.linear_publisher.publish(linear_msg)
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
                 
             # roate to face left door, whichis at yaw = 180
             deltaAngle = Float64()
@@ -1199,9 +1228,8 @@ class MasterNode(Node):
         elif self.state == "rotate_to_right_door":
             # this assume that the robot is started straight and door is perpendicular to the robot starting yaw
             # set linear to be zero
-            linear_msg = Int8()
-            linear_msg.data = 0
-            self.linear_publisher.publish(linear_msg)
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
             
             # roate to face left door, whichis at yaw = 0
             deltaAngle = Float64()
@@ -1225,9 +1253,8 @@ class MasterNode(Node):
             if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
                 
                 # move forwad
-                linear_msg = Int8()
-                linear_msg.data = self.linear_speed
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = LIN_MAX
+                self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -1236,9 +1263,8 @@ class MasterNode(Node):
                 
             else:
                 # move forwad
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -1266,9 +1292,8 @@ class MasterNode(Node):
             if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
                 
                 # move forwad
-                linear_msg = Int8()
-                linear_msg.data = self.linear_speed
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = LIN_MAX
+                self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -1277,9 +1302,8 @@ class MasterNode(Node):
             
             else:
                 # move forwad
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
                 deltaAngle_msg = Float64()
@@ -1320,9 +1344,8 @@ class MasterNode(Node):
                 self.get_logger().info('[checking_walls_distance]: too close! moving away')
 
                 # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
 
                 # angle_min > or < 180, the delta angle to move away from the object is still the same
                 deltaAngle_msg = Float64()
@@ -1349,9 +1372,8 @@ class MasterNode(Node):
                     self.get_logger().info('[rotating_to_move_away_from_walls]: something infront')
 
                     # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle = 0 to stop
                     deltaAngle_msg = Float64()
@@ -1368,9 +1390,8 @@ class MasterNode(Node):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
 
                         # set linear to be self.linear_speed to move forward fastest
-                        linear_msg = Int8()
-                        linear_msg.data = self.linear_speed
-                        self.linear_publisher.publish(linear_msg)
+                        self.linear_msg.data = LIN_MAX
+                        self.linear_publisher.publish(self.linear_msg)
 
                         anglularVel_msg = Int8()
 
@@ -1378,10 +1399,10 @@ class MasterNode(Node):
                         # elif right got something, rotate left
                         # else go straight
                         if all(self.laser_range[self.leftIndexL:self.leftIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = -self.linear_speed
+                            anglularVel_msg.data = -LIN_MAX
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and right')
                         elif all(self.laser_range[self.rightIndexL:self.rightIndexH] < BUCKET_TOO_CLOSE):
-                            anglularVel_msg.data = self.linear_speed
+                            anglularVel_msg.data = LIN_MAX
                             self.get_logger().info('[rotating_to_move_away_from_walls]: moving forward and left')
                         else:
                             anglularVel_msg.data = 0
@@ -1393,9 +1414,8 @@ class MasterNode(Node):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: moved far enough, butt is clear')
 
                         # set linear to be zero
-                        linear_msg = Int8()
-                        linear_msg.data = 0
-                        self.linear_publisher.publish(linear_msg)
+                        self.linear_msg.data = 0
+                        self.linear_publisher.publish(self.linear_msg)
 
                         # set delta angle = 0 to stop
                         deltaAngle_msg = Float64()
@@ -1415,9 +1435,8 @@ class MasterNode(Node):
 
                 if self.bucketAngle < 180:
                     # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle = bucketAngle
                     deltaAngle_msg = Float64()
@@ -1425,9 +1444,8 @@ class MasterNode(Node):
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
                 elif self.bucketAngle > 180:
                     # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle = bucketAngle -360
                     deltaAngle_msg = Float64()
@@ -1436,9 +1454,8 @@ class MasterNode(Node):
                 else:
                     # the case where it is 180, turn 90 deg first
                     # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
 
                     # set delta angle = 90
                     deltaAngle_msg = Float64()
@@ -1459,12 +1476,10 @@ class MasterNode(Node):
                 pass
             else:
                 # set linear to be self.linear_speed to move forward fastest
-                linear_msg = Int8()
-                linear_msg.data = self.linear_speed
-                self.linear_publisher.publish(linear_msg)
+                self.linear_msg.data = LIN_MAX
+                self.linear_publisher.publish(self.linear_msg)
 
                 # if the bucket is in the to the right, turn left slightly
-                anglularVel_msg = Int8()
 
                 if self.bucketAngle > 5 and self.bucketAngle < 180:
                     anglularVel_msg.data = 100
@@ -1669,11 +1684,24 @@ class MasterNode(Node):
         self.get_logger().info('[move_straight_to]: currently at (%d %d) with yaw %f, moving straight to (%d, %d)' % (
         self.botx_pixel, self.boty_pixel, self.yaw, tx, ty))
         # self.get_logger().info('currently yaw is %f, target yaw is %f' % (self.yaw, target_yaw))
+        
+        # if deltaAngle is too big, stop then rotate
+        # else, rotate and move at the same time
+        if abs(target_yaw - self.yaw) >= 90:
+            # set linear
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
+        else:
+            # set linear
+            self.linear_msg.data = LIN_WHEN_ROTATING
+            self.linear_publisher.publish(self.linear_msg)
+
+        # set delta angle to rotate to target angle
         deltaAngle = Float64()
         deltaAngle.data = target_yaw - self.yaw
         self.deltaAngle_publisher.publish(deltaAngle)
         self.state = "maze_rotating"
-
+        
     def toId(self, y, x, d):
         return d * self.map_h * self.map_w + y * self.map_w + x
 
