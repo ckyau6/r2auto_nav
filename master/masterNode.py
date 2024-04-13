@@ -2,7 +2,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import UInt8, UInt16, Float64, String, Int8
+from std_msgs.msg import UInt8, UInt16, Float64, String, Int8, Float32MultiArray
 from geometry_msgs.msg import Twist, Pose
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
@@ -11,18 +11,11 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from PIL import Image
 import math
-import heapq
 
 import argparse
 from collections import deque
 from skimage.morphology import dilation, disk
 from functools import cmp_to_key
-
-from scipy.ndimage import generic_filter
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra
-
-import time
 
 import cv2
 
@@ -80,12 +73,6 @@ OBSTACLE = 3
 # RADIUS_OF_IGNORE = 3
 RADIUS_OF_IGNORE = 1
 
-PARAMETER_R = 0.93
-# use odd number for window size
-# WINDOWSIZE = 21
-# WINDOWSIZE = 9
-WINDOWSIZE = 25
-
 # if distance is more than this value, skip that point
 FRONTIER_SKIP_THRESHOLD = 1e9
 
@@ -100,7 +87,6 @@ def angle_from_quaternion(x, y, z, w):
     t3 = +2.0 * (w * z + x * y)
     t4 = +1.0 - 2.0 * (y * y + z * z)
     return math.degrees(math.atan2(t3, t4))
-
 
 class MasterNode(Node):
     def __init__(self, show_plot):
@@ -198,9 +184,25 @@ class MasterNode(Node):
 
         self.leftDoor_pixel = (0, 0)
         self.rightDoor_pixel = (0, 0)
-        self.finishLine_Ypixel = 0
+        self.finishLine_pixel = (0, 0)
         
-        self.disableOCC = False
+        ''' ================================================ dick star node for dist and pre ================================================ '''
+        # Create a subscriber to the topic distMap
+        self.distMap_subscription = self.create_subscription(
+            Float32MultiArray,
+            'distMap',
+            self.distMap_callback,
+            10)
+        
+        # Create a subscriber to the topic preMap
+        self.preMap_subscription = self.create_subscription(
+            Float32MultiArray,
+            'preMap',
+            self.preMap_callback,
+            10)
+        
+        self.dist = []
+        self.pre = []
 
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
@@ -366,130 +368,183 @@ class MasterNode(Node):
 
     def occ_callback(self, msg):
         
-        if self.disableOCC == False:
-            occTime = time.time()
-            self.get_logger().info('[occ_callback]: new occ map!')
+        occTime = time.time()
+        self.get_logger().info('[occ_callback]: new occ map!')
 
-            self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
-            self.map_w = msg.info.width
-            self.map_h = msg.info.height
-            self.map_origin_x = msg.info.origin.position.x
-            self.map_origin_y = msg.info.origin.position.y
+        ''' ================================================ Update points ================================================ '''
 
-            # this gives the locations of bot in the occupancy map, in pixel
-            self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
-            self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
+        self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
+        self.map_w = msg.info.width
+        self.map_h = msg.info.height
+        self.map_origin_x = msg.info.origin.position.x
+        self.map_origin_y = msg.info.origin.position.y
 
-            # this gives the locations of magic origin in the occupancy map, in pixel
-            self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
-            self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
-            self.magicOriginx_pixel += self.offset_x
-            self.magicOriginy_pixel += self.offset_y
+        # this gives the locations of bot in the occupancy map, in pixel
+        self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
+        self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
 
-            # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
-            self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-            self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-            self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+        # this gives the locations of magic origin in the occupancy map, in pixel
+        self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
+        self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
+        self.magicOriginx_pixel += self.offset_x
+        self.magicOriginy_pixel += self.offset_y
 
-            # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
-            #
-            # TEMPPP
-            # Convert the OccupancyGrid to a numpy array
-            self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
+        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
+        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+        self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
 
-            # this converts the occupancy grid to an 1d array of map, umpapped, occupied
-            occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count',
-                                                                    bins=occ_bins)
+        ''' ================================================ Oriori ================================================ '''
 
-            # reshape to 2D array
-            # 1 = unmapped
-            # 2 = mapped and open
-            # 3 = mapped and obstacle
-            self.occupancyMap = np.uint8(binnum.reshape(msg.info.height, msg.info.width))
+        # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+        #
+        # TEMPPP
+        # Convert the OccupancyGrid to a numpy array
+        self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
 
-            # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
-            # pixelExpend = numbers of pixel to expend by
-            pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))
+        ''' ================================================ Dilation for frontier ================================================ '''
 
-            # Create a mask of the UNMAPPED areas
-            unmapped_mask = (self.occupancyMap == UNMAPPED)
+        # this converts the occupancy grid to an 1d array of map, umpapped, occupied
+        occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count',
+                                                                bins=occ_bins)
 
-            # Create a mask of the OPEN areas
-            open_mask = (self.occupancyMap == OPEN)
+        # reshape to 2D array
+        # 1 = unmapped
+        # 2 = mapped and open
+        # 3 = mapped and obstacle
+        self.occupancyMap = np.uint8(binnum.reshape(msg.info.height, msg.info.width))
 
-            # Create a mask of the OBSTACLE areas
-            obstacle_mask = (self.occupancyMap == OBSTACLE)
+        # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
+        # pixelExpend = numbers of pixel to expend by
+        pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))
 
-            # Create a structuring element for the dilation
-            selem = disk(pixelExpend)
+        # Create a mask of the UNMAPPED areas
+        unmapped_mask = (self.occupancyMap == UNMAPPED)
 
-            # Perform the dilation
-            dilated = dilation(obstacle_mask, selem)
+        # Create a mask of the OPEN areas
+        open_mask = (self.occupancyMap == OPEN)
 
-            # Apply the dilation only within the OPEN areas
-            self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
+        # Create a mask of the OBSTACLE areas
+        obstacle_mask = (self.occupancyMap == OBSTACLE)
 
-            # Normalize the values to the range [0, 1]
-            # self.oriorimap /= 100.0
+        # Create a structuring element for the dilation
+        selem = disk(pixelExpend)
 
-            # # Print all unique values in self.oriorimap
-            # unique_values = np.unique(self.oriorimap)
-            # self.get_logger().info('Unique values in oriorimap: %s' % unique_values)
+        # Perform the dilation
+        dilated = dilation(obstacle_mask, selem)
 
-            # Define the function to apply over the moving window
-            def func(window):
-                # Calculate the distances from the center of the grid
-                center = WINDOWSIZE // 2
-                distances = np.sqrt(
-                    (np.arange(WINDOWSIZE) - center) ** 2 + (np.arange(WINDOWSIZE)[:, None] - center) ** 2).reshape(
-                    WINDOWSIZE ** 2)
-                distances *= 2.5  # TEMP
+        # Apply the dilation only within the OPEN areas
+        self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
+        
+        ''' ================================================ Dick Star ================================================ '''
 
-                # Calculate the new pixel value
-                new_pixel = np.max(window * PARAMETER_R ** distances)
+        # # Define the function to apply over the moving window
+        # def func(window):
+        #     # Calculate the distances from the center of the grid
+        #     center = WINDOWSIZE // 2
+        #     distances = np.sqrt(
+        #         (np.arange(WINDOWSIZE) - center) ** 2 + (np.arange(WINDOWSIZE)[:, None] - center) ** 2).reshape(
+        #         WINDOWSIZE ** 2)
+        #     distances *= 2.5  # TEMP
 
-                return new_pixel
+        #     # Calculate the new pixel value
+        #     new_pixel = np.max(window * PARAMETER_R ** distances)
 
-            # Apply the function over a moving window on the image
-            self.processedOcc = np.round(generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))).astype(int)
+        #     return new_pixel
 
-            # regard unmapped area as perfectly blocked area
-            self.processedOcc[unmapped_mask] = 100
+        # # Apply the function over a moving window on the image
+        # self.processedOcc = np.round(generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))).astype(int)
 
-            # self.get_logger().info(str(self.processedOcc == self.oriorimap))
+        # # regard unmapped area as perfectly blocked area
+        # self.processedOcc[unmapped_mask] = 100
 
-            self.dijkstra()
+        # # self.get_logger().info(str(self.processedOcc == self.oriorimap))
 
-            # find frontier points
-            self.frontierSearch()
+        # self.dijkstra()
+        
+        ''' ================================================ Recalculate path and frontiers ================================================ '''
+        
+        # find frontier points
+        self.frontierSearch()
 
-            self.path_recalc_stat += 1
-            self.path_recalc_stat %= self.path_recalc_freq
-            if len(self.dest_x) > 0:
-                # if self.magicState == "frontier_search" and (
-                # self.dest_y[-1] + self.offset_y, self.dest_x[-1] + self.offset_x) not in self.frontier:
-                #     # set linear to be zero
-                #     linear_msg = Int8()
-                #     linear_msg.data = 0
-                #     self.linear_publisher.publish(linear_msg)
+        self.path_recalc_stat += 1
+        self.path_recalc_stat %= self.path_recalc_freq
+        if len(self.dest_x) > 0:
+            # if self.magicState == "frontier_search" and (
+            # self.dest_y[-1] + self.offset_y, self.dest_x[-1] + self.offset_x) not in self.frontier:
+            #     # set linear to be zero
+            #     linear_msg = Int8()
+            #     linear_msg.data = 0
+            #     self.linear_publisher.publish(linear_msg)
 
-                #     # set delta angle = 0 to stop
-                #     deltaAngle_msg = Float64()
-                #     deltaAngle_msg.data = 0.0
-                #     self.deltaAngle_publisher.publish(deltaAngle_msg)
+            #     # set delta angle = 0 to stop
+            #     deltaAngle_msg = Float64()
+            #     deltaAngle_msg.data = 0.0
+            #     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-                #     self.dest_x = []
-                #     self.dest_y = []
+            #     self.dest_x = []
+            #     self.dest_y = []
 
-                #     self.get_logger().info('[occ_callback]: designation is already mapped; get back to frontier_search')
+            #     self.get_logger().info('[occ_callback]: designation is already mapped; get back to frontier_search')
 
-                #     self.state = self.magicState
+            #     self.state = self.magicState
 
-                #     timeTaken = time.time() - occTime
-                #     self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
-                #     return
+            #     timeTaken = time.time() - occTime
+            #     self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+            #     return
+            
+            if self.magicState == "frontier_search" and self.dist[self.dest_y[-1] + self.offset_y][self.dest_x[-1] + self.offset_x] > FRONTIER_SKIP_THRESHOLD:
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
-                if self.magicState == "frontier_search" and self.dist[self.dest_y[-1] + self.offset_y][self.dest_x[-1] + self.offset_x] > FRONTIER_SKIP_THRESHOLD:
+                self.dest_x.clear()
+                self.dest_y.clear()
+                self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
+                self.state = self.magicState
+                return
+            
+            if self.path_recalc_stat != 0:
+                timeTaken = time.time() - occTime
+                self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+                return
+
+            # check the path for the last point which is the destination set last time
+            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
+
+            if len(new_dest_x) == 0:
+                # set linear to be zero
+                linear_msg = Int8()
+                linear_msg.data = 0
+                self.linear_publisher.publish(linear_msg)
+
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                self.dest_x.clear()
+                self.dest_y.clear()
+                self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
+                self.state = self.magicState
+                return
+
+            # remove the current position which lies at the front of array
+            if len(new_dest_x) > 1:
+                new_dest_x = new_dest_x[1:]
+                new_dest_y = new_dest_y[1:]
+
+            # compare the new path with the old path
+            if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
+                self.get_logger().info('[occ_callback]: path updated')
+                # if the first target point changes, stop once and move again
+                if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
                     # set linear to be zero
                     linear_msg = Int8()
                     linear_msg.data = 0
@@ -499,65 +554,22 @@ class MasterNode(Node):
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data = 0.0
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
-                    
-                    self.dest_x.clear()
-                    self.dest_y.clear()
-                    self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
-                    self.state = self.magicState
-                    return
-                
-                if self.path_recalc_stat != 0:
-                    timeTaken = time.time() - occTime
-                    self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
-                    return
 
-                # check the path for the last point which is the destination set last time
-                new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
+                    self.move_straight_to(new_dest_x[0], new_dest_y[0])
+                # update target points
+                self.dest_x = new_dest_x
+                self.dest_y = new_dest_y
 
-                if len(new_dest_x) == 0:
-                    # set linear to be zero
-                    linear_msg = Int8()
-                    linear_msg.data = 0
-                    self.linear_publisher.publish(linear_msg)
-
-                    # set delta angle = 0 to stop
-                    deltaAngle_msg = Float64()
-                    deltaAngle_msg.data = 0.0
-                    self.deltaAngle_publisher.publish(deltaAngle_msg)
-                    
-                    self.dest_x.clear()
-                    self.dest_y.clear()
-                    self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
-                    self.state = self.magicState
-                    return
-
-                # remove the current position which lies at the front of array
-                if len(new_dest_x) > 1:
-                    new_dest_x = new_dest_x[1:]
-                    new_dest_y = new_dest_y[1:]
-
-                # compare the new path with the old path
-                if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
-                    self.get_logger().info('[occ_callback]: path updated')
-                    # if the first target point changes, stop once and move again
-                    if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
-                        # set linear to be zero
-                        linear_msg = Int8()
-                        linear_msg.data = 0
-                        self.linear_publisher.publish(linear_msg)
-
-                        # set delta angle = 0 to stop
-                        deltaAngle_msg = Float64()
-                        deltaAngle_msg.data = 0.0
-                        self.deltaAngle_publisher.publish(deltaAngle_msg)
-
-                        self.move_straight_to(new_dest_x[0], new_dest_y[0])
-                    # update target points
-                    self.dest_x = new_dest_x
-                    self.dest_y = new_dest_y
-
-            timeTaken = time.time() - occTime
-            self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+        timeTaken = time.time() - occTime
+        self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+        
+    def distMap_callback(self, msg):
+        # Convert the 1D array in the message back to a 2D array
+        self.dist = np.array(msg.data).reshape((self.map_h, self.map_w))
+        
+    def preMap_callback(self, msg):
+        # Convert the 1D array in the message back to a 2D array
+        self.pre = np.array(msg.data).reshape((self.map_h, self.map_w))
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
@@ -778,17 +790,14 @@ class MasterNode(Node):
             boolCurve_msg = Int8()
             boolCurve_msg.data = 0
             self.boolCurve_publisher.publish(boolCurve_msg)
-            
-            # reset to not disable OCC callback
-            self.disableOCC = False
-
+        
         elif self.state == "maze_rotating":
              # self.get_logger().info('current yaw: %f' % self.yaw)
             
             self.get_logger().info('[maze_rotating]: rotating')
             
             if self.robotControlNodeState == "rotateStop":
-                # check that dist is not empty (its empty for cases where maze_moving is used to rotate only)
+                # check that dest is not empty (its empty for cases where maze_moving is used to rotate only)
                 if len(self.dest_x) == 0:
                     self.get_logger().info('[maze_rotating]: no more destination; get back to magicState: %s' % self.magicState)
                     self.state = self.magicState
@@ -1203,9 +1212,6 @@ class MasterNode(Node):
                 boolCurve_msg.data = 1
                 self.boolCurve_publisher.publish(boolCurve_msg)
                 
-                # disable OCC callbacks since after entering it will not be used
-                self.disableOCC = True
-                
                 # # temp
                 # self.state = self.magicState = "idle"
             
@@ -1241,9 +1247,6 @@ class MasterNode(Node):
                 boolCurve_msg = Int8()
                 boolCurve_msg.data = 1
                 self.boolCurve_publisher.publish(boolCurve_msg)
-                
-                # disable OCC callbacks since after entering it will not be used
-                self.disableOCC = True
                 
                 # # temp
                 # self.state = self.magicState = "idle"
@@ -1620,88 +1623,88 @@ class MasterNode(Node):
         self.deltaAngle_publisher.publish(deltaAngle)
         self.state = "maze_rotating"
 
-    def toId(self, y, x, d):
-        return d * self.map_h * self.map_w + y * self.map_w + x
+    # def toId(self, y, x, d):
+    #     return d * self.map_h * self.map_w + y * self.map_w + x
 
-    def construct_graph(self):
-        if self.d_dim == (self.map_h, self.map_w):
-            iter = 0
-            for y in range(self.map_h):
-                for x in range(self.map_w):
-                    for d in range(len(self.dx)):
-                        for i in [1, -1]:
-                            self.d_data[iter] = 3
-                            iter += 1
-                        ny = y + self.dy[d]
-                        nx = x + self.dx[d]
-                        if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
-                            self.d_data[iter] = self.d_cost[self.processedOcc[ny][nx]]
-                            iter += 1
-        else:
-            self.get_logger().info("[construct_graph]: dimension changed")
-            self.d_dim = (self.map_h, self.map_w)
-            row = []
-            col = []
-            data = []
-            for y in range(self.map_h):
-                for x in range(self.map_w):
-                    for d in range(len(self.dx)):
-                        for i in [1, -1]:
-                            row.append(self.toId(y, x, d))
-                            col.append(self.toId(y, x, (d + i) % 4))
-                            data.append(3)
-                        ny = y + self.dy[d]
-                        nx = x + self.dx[d]
-                        if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
-                            row.append(self.toId(y, x, d))
-                            col.append(self.toId(ny, nx, d))
-                            data.append(self.d_cost[self.processedOcc[ny][nx]])
-            self.d_row = np.array(row)
-            self.d_col = np.array(col)
-            self.d_data = np.array(data, dtype=np.float32)
+    # def construct_graph(self):
+    #     if self.d_dim == (self.map_h, self.map_w):
+    #         iter = 0
+    #         for y in range(self.map_h):
+    #             for x in range(self.map_w):
+    #                 for d in range(len(self.dx)):
+    #                     for i in [1, -1]:
+    #                         self.d_data[iter] = 3
+    #                         iter += 1
+    #                     ny = y + self.dy[d]
+    #                     nx = x + self.dx[d]
+    #                     if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+    #                         self.d_data[iter] = self.d_cost[self.processedOcc[ny][nx]]
+    #                         iter += 1
+    #     else:
+    #         self.get_logger().info("[construct_graph]: dimension changed")
+    #         self.d_dim = (self.map_h, self.map_w)
+    #         row = []
+    #         col = []
+    #         data = []
+    #         for y in range(self.map_h):
+    #             for x in range(self.map_w):
+    #                 for d in range(len(self.dx)):
+    #                     for i in [1, -1]:
+    #                         row.append(self.toId(y, x, d))
+    #                         col.append(self.toId(y, x, (d + i) % 4))
+    #                         data.append(3)
+    #                     ny = y + self.dy[d]
+    #                     nx = x + self.dx[d]
+    #                     if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+    #                         row.append(self.toId(y, x, d))
+    #                         col.append(self.toId(ny, nx, d))
+    #                         data.append(self.d_cost[self.processedOcc[ny][nx]])
+    #         self.d_row = np.array(row)
+    #         self.d_col = np.array(col)
+    #         self.d_data = np.array(data, dtype=np.float32)
 
-    def dijkstra(self):
-        dickStarTime = time.time()
+    # def dijkstra(self):
+    #     dickStarTime = time.time()
 
-        sx = self.botx_pixel
-        sy = self.boty_pixel
-        cur_dir = round(self.yaw / 90) % 4
+    #     sx = self.botx_pixel
+    #     sy = self.boty_pixel
+    #     cur_dir = round(self.yaw / 90) % 4
 
-        self.construct_graph()
+    #     self.construct_graph()
 
-        timeTaken = time.time() - dickStarTime
-        self.get_logger().info('[dijkstra1]: it took: %f' % timeTaken)
+    #     timeTaken = time.time() - dickStarTime
+    #     self.get_logger().info('[dijkstra1]: it took: %f' % timeTaken)
 
-        graph_size = self.map_h * self.map_w * len(self.dx)
-        graph = csr_matrix((self.d_data, (self.d_row, self.d_col)), shape=(graph_size, graph_size))
+    #     graph_size = self.map_h * self.map_w * len(self.dx)
+    #     graph = csr_matrix((self.d_data, (self.d_row, self.d_col)), shape=(graph_size, graph_size))
 
-        timeTaken = time.time() - dickStarTime
-        self.get_logger().info('[dijkstra2]: it took: %f' % timeTaken)
+    #     timeTaken = time.time() - dickStarTime
+    #     self.get_logger().info('[dijkstra2]: it took: %f' % timeTaken)
 
-        p_dist, p_pre = dijkstra(graph, indices=self.toId(sy, sx, cur_dir), return_predecessors=True)
+    #     p_dist, p_pre = dijkstra(graph, indices=self.toId(sy, sx, cur_dir), return_predecessors=True)
 
-        timeTaken = time.time() - dickStarTime
-        self.get_logger().info('[dijkstra3]: it took: %f' % timeTaken)
+    #     timeTaken = time.time() - dickStarTime
+    #     self.get_logger().info('[dijkstra3]: it took: %f' % timeTaken)
 
-        self.dist = np.full((self.map_h, self.map_w), np.inf, dtype=float)
-        self.pre = np.full((self.map_h, self.map_w, 2), -1)
-        for y in range(self.map_h):
-            for x in range(self.map_w):
-                mn = np.inf
-                opt_d = -1
-                for d in range(len(self.dx)):
-                    if p_dist[self.toId(y, x, d)] < mn:
-                        mn = p_dist[self.toId(y, x, d)]
-                        opt_d = d
-                if opt_d == -1:
-                    continue
-                self.dist[y][x] = mn
-                p = p_pre[self.toId(y, x, opt_d)]
-                if p >= 0:
-                    self.pre[y][x] = (p // self.map_w % self.map_h, p % self.map_w)
+    #     self.dist = np.full((self.map_h, self.map_w), np.inf, dtype=float)
+    #     self.pre = np.full((self.map_h, self.map_w, 2), -1)
+    #     for y in range(self.map_h):
+    #         for x in range(self.map_w):
+    #             mn = np.inf
+    #             opt_d = -1
+    #             for d in range(len(self.dx)):
+    #                 if p_dist[self.toId(y, x, d)] < mn:
+    #                     mn = p_dist[self.toId(y, x, d)]
+    #                     opt_d = d
+    #             if opt_d == -1:
+    #                 continue
+    #             self.dist[y][x] = mn
+    #             p = p_pre[self.toId(y, x, opt_d)]
+    #             if p >= 0:
+    #                 self.pre[y][x] = (p // self.map_w % self.map_h, p % self.map_w)
 
-        timeTaken = time.time() - dickStarTime
-        self.get_logger().info('[dijkstra]: it took: %f' % timeTaken)
+    #     timeTaken = time.time() - dickStarTime
+    #     self.get_logger().info('[dijkstra]: it took: %f' % timeTaken)
 
     def find_path_to(self, tx, ty):
         sx = self.botx_pixel

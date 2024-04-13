@@ -11,6 +11,7 @@ setup(
               package_name + '.bucketFinder', 
               package_name + '.position_track', 
               package_name + '.robot_control',
+              package_name + '.dickStar',
               ],
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -37,6 +38,7 @@ setup(
             'httpDoorNode = auto_nav.httpReq.httpDoorNode:main',
             'bucketFinderNode = auto_nav.bucketFinder.bucketFinderNode:main',
             'robotControlNode = auto_nav.robot_control.robotControlNode:main',
+            'dickStarNode = auto_nav.dickStar.dickStarNode:main',
         ],
     },
 )
