@@ -29,7 +29,7 @@ import cv2
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
 
-occ_bins = [-1, 0, 50, 100]
+occ_bins = [-1, 0, 55, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
@@ -80,7 +80,7 @@ OBSTACLE = 3
 # RADIUS_OF_IGNORE = 3
 RADIUS_OF_IGNORE = 1
 
-PARAMETER_R = 0.91
+PARAMETER_R = 0.93
 # use odd number for window size
 # WINDOWSIZE = 21
 # WINDOWSIZE = 9
@@ -199,6 +199,8 @@ class MasterNode(Node):
         self.leftDoor_pixel = (0, 0)
         self.rightDoor_pixel = (0, 0)
         self.finishLine_Ypixel = 0
+        
+        self.disableOCC = False
 
         ''' ================================================ robot position ================================================ '''
         # Create a subscriber to the topic
@@ -363,180 +365,131 @@ class MasterNode(Node):
         self.bucketAngle = msg.data
 
     def occ_callback(self, msg):
-        occTime = time.time()
-        self.get_logger().info('[occ_callback]: new occ map!')
+        
+        if self.disableOCC == False:
+            occTime = time.time()
+            self.get_logger().info('[occ_callback]: new occ map!')
 
-        self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
-        self.map_w = msg.info.width
-        self.map_h = msg.info.height
-        self.map_origin_x = msg.info.origin.position.x
-        self.map_origin_y = msg.info.origin.position.y
+            self.map_res = msg.info.resolution  # according to experiment, should be 0.05 m
+            self.map_w = msg.info.width
+            self.map_h = msg.info.height
+            self.map_origin_x = msg.info.origin.position.x
+            self.map_origin_y = msg.info.origin.position.y
 
-        # this gives the locations of bot in the occupancy map, in pixel
-        self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
-        self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
+            # this gives the locations of bot in the occupancy map, in pixel
+            self.botx_pixel = round((self.pos_x - self.map_origin_x) / self.map_res)
+            self.boty_pixel = round((self.pos_y - self.map_origin_y) / self.map_res)
 
-        # this gives the locations of magic origin in the occupancy map, in pixel
-        self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
-        self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
-        self.magicOriginx_pixel += self.offset_x
-        self.magicOriginy_pixel += self.offset_y
+            # this gives the locations of magic origin in the occupancy map, in pixel
+            self.offset_x = round((-self.map_origin_x) / self.map_res) - self.magicOriginx_pixel
+            self.offset_y = round((-self.map_origin_y) / self.map_res) - self.magicOriginy_pixel
+            self.magicOriginx_pixel += self.offset_x
+            self.magicOriginy_pixel += self.offset_y
 
-        # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
-        self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-        self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-        self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+            # calculate door and finish line coords in pixels, this may exceed the current occ map size since it extends beyong the explored area
+            self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+            self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
+            self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
 
-        # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
-        #
-        # TEMPPP
-        # Convert the OccupancyGrid to a numpy array
-        self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
+            # self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+            #
+            # TEMPPP
+            # Convert the OccupancyGrid to a numpy array
+            self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
 
-        # this converts the occupancy grid to an 1d array of map, umpapped, occupied
-        occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count',
-                                                                 bins=occ_bins)
+            # this converts the occupancy grid to an 1d array of map, umpapped, occupied
+            occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count',
+                                                                    bins=occ_bins)
 
-        # reshape to 2D array
-        # 1 = unmapped
-        # 2 = mapped and open
-        # 3 = mapped and obstacle
-        self.occupancyMap = np.uint8(binnum.reshape(msg.info.height, msg.info.width))
+            # reshape to 2D array
+            # 1 = unmapped
+            # 2 = mapped and open
+            # 3 = mapped and obstacle
+            self.occupancyMap = np.uint8(binnum.reshape(msg.info.height, msg.info.width))
 
-        # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
-        # pixelExpend = numbers of pixel to expend by
-        pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))
+            # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
+            # pixelExpend = numbers of pixel to expend by
+            pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))
 
-        # Create a mask of the UNMAPPED areas
-        unmapped_mask = (self.occupancyMap == UNMAPPED)
+            # Create a mask of the UNMAPPED areas
+            unmapped_mask = (self.occupancyMap == UNMAPPED)
 
-        # Create a mask of the OPEN areas
-        open_mask = (self.occupancyMap == OPEN)
+            # Create a mask of the OPEN areas
+            open_mask = (self.occupancyMap == OPEN)
 
-        # Create a mask of the OBSTACLE areas
-        obstacle_mask = (self.occupancyMap == OBSTACLE)
+            # Create a mask of the OBSTACLE areas
+            obstacle_mask = (self.occupancyMap == OBSTACLE)
 
-        # Create a structuring element for the dilation
-        selem = disk(pixelExpend)
+            # Create a structuring element for the dilation
+            selem = disk(pixelExpend)
 
-        # Perform the dilation
-        dilated = dilation(obstacle_mask, selem)
+            # Perform the dilation
+            dilated = dilation(obstacle_mask, selem)
 
-        # Apply the dilation only within the OPEN areas
-        self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
+            # Apply the dilation only within the OPEN areas
+            self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
 
-        # Normalize the values to the range [0, 1]
-        # self.oriorimap /= 100.0
+            # Normalize the values to the range [0, 1]
+            # self.oriorimap /= 100.0
 
-        # # Print all unique values in self.oriorimap
-        # unique_values = np.unique(self.oriorimap)
-        # self.get_logger().info('Unique values in oriorimap: %s' % unique_values)
+            # # Print all unique values in self.oriorimap
+            # unique_values = np.unique(self.oriorimap)
+            # self.get_logger().info('Unique values in oriorimap: %s' % unique_values)
 
-        # Define the function to apply over the moving window
-        def func(window):
-            # Calculate the distances from the center of the grid
-            center = WINDOWSIZE // 2
-            distances = np.sqrt(
-                (np.arange(WINDOWSIZE) - center) ** 2 + (np.arange(WINDOWSIZE)[:, None] - center) ** 2).reshape(
-                WINDOWSIZE ** 2)
-            distances *= 2.5  # TEMP
+            # Define the function to apply over the moving window
+            def func(window):
+                # Calculate the distances from the center of the grid
+                center = WINDOWSIZE // 2
+                distances = np.sqrt(
+                    (np.arange(WINDOWSIZE) - center) ** 2 + (np.arange(WINDOWSIZE)[:, None] - center) ** 2).reshape(
+                    WINDOWSIZE ** 2)
+                distances *= 2.5  # TEMP
 
-            # Calculate the new pixel value
-            new_pixel = np.max(window * PARAMETER_R ** distances)
+                # Calculate the new pixel value
+                new_pixel = np.max(window * PARAMETER_R ** distances)
 
-            return new_pixel
+                return new_pixel
 
-        # Apply the function over a moving window on the image
-        self.processedOcc = np.round(generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))).astype(int)
+            # Apply the function over a moving window on the image
+            self.processedOcc = np.round(generic_filter(self.oriorimap, func, size=(WINDOWSIZE, WINDOWSIZE))).astype(int)
 
-        # regard unmapped area as perfectly blocked area
-        self.processedOcc[unmapped_mask] = 100
+            # regard unmapped area as perfectly blocked area
+            self.processedOcc[unmapped_mask] = 100
 
-        # self.get_logger().info(str(self.processedOcc == self.oriorimap))
+            # self.get_logger().info(str(self.processedOcc == self.oriorimap))
 
-        self.dijkstra()
+            self.dijkstra()
 
-        # find frontier points
-        self.frontierSearch()
+            # find frontier points
+            self.frontierSearch()
 
-        self.path_recalc_stat += 1
-        self.path_recalc_stat %= self.path_recalc_freq
-        if len(self.dest_x) > 0:
-            # if self.magicState == "frontier_search" and (
-            # self.dest_y[-1] + self.offset_y, self.dest_x[-1] + self.offset_x) not in self.frontier:
-            #     # set linear to be zero
-            #     linear_msg = Int8()
-            #     linear_msg.data = 0
-            #     self.linear_publisher.publish(linear_msg)
+            self.path_recalc_stat += 1
+            self.path_recalc_stat %= self.path_recalc_freq
+            if len(self.dest_x) > 0:
+                # if self.magicState == "frontier_search" and (
+                # self.dest_y[-1] + self.offset_y, self.dest_x[-1] + self.offset_x) not in self.frontier:
+                #     # set linear to be zero
+                #     linear_msg = Int8()
+                #     linear_msg.data = 0
+                #     self.linear_publisher.publish(linear_msg)
 
-            #     # set delta angle = 0 to stop
-            #     deltaAngle_msg = Float64()
-            #     deltaAngle_msg.data = 0.0
-            #     self.deltaAngle_publisher.publish(deltaAngle_msg)
+                #     # set delta angle = 0 to stop
+                #     deltaAngle_msg = Float64()
+                #     deltaAngle_msg.data = 0.0
+                #     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-            #     self.dest_x = []
-            #     self.dest_y = []
+                #     self.dest_x = []
+                #     self.dest_y = []
 
-            #     self.get_logger().info('[occ_callback]: designation is already mapped; get back to frontier_search')
+                #     self.get_logger().info('[occ_callback]: designation is already mapped; get back to frontier_search')
 
-            #     self.state = self.magicState
+                #     self.state = self.magicState
 
-            #     timeTaken = time.time() - occTime
-            #     self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
-            #     return
-            
-            if self.magicState == "frontier_search" and self.dist[self.dest_y[-1] + self.offset_y][self.dest_x[-1] + self.offset_x] > FRONTIER_SKIP_THRESHOLD:
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
-
-                # set delta angle = 0 to stop
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                #     timeTaken = time.time() - occTime
+                #     self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+                #     return
                 
-                self.dest_x.clear()
-                self.dest_y.clear()
-                self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
-                self.state = self.magicState
-                return
-            
-            if self.path_recalc_stat != 0:
-                timeTaken = time.time() - occTime
-                self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
-                return
-
-            # check the path for the last point which is the destination set last time
-            new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
-
-            if len(new_dest_x) == 0:
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
-
-                # set delta angle = 0 to stop
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
-                
-                self.dest_x.clear()
-                self.dest_y.clear()
-                self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
-                self.state = self.magicState
-                return
-
-            # remove the current position which lies at the front of array
-            if len(new_dest_x) > 1:
-                new_dest_x = new_dest_x[1:]
-                new_dest_y = new_dest_y[1:]
-
-            # compare the new path with the old path
-            if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
-                self.get_logger().info('[occ_callback]: path updated')
-                # if the first target point changes, stop once and move again
-                if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
+                if self.magicState == "frontier_search" and self.dist[self.dest_y[-1] + self.offset_y][self.dest_x[-1] + self.offset_x] > FRONTIER_SKIP_THRESHOLD:
                     # set linear to be zero
                     linear_msg = Int8()
                     linear_msg.data = 0
@@ -546,14 +499,65 @@ class MasterNode(Node):
                     deltaAngle_msg = Float64()
                     deltaAngle_msg.data = 0.0
                     self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    
+                    self.dest_x.clear()
+                    self.dest_y.clear()
+                    self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
+                    self.state = self.magicState
+                    return
+                
+                if self.path_recalc_stat != 0:
+                    timeTaken = time.time() - occTime
+                    self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+                    return
 
-                    self.move_straight_to(new_dest_x[0], new_dest_y[0])
-                # update target points
-                self.dest_x = new_dest_x
-                self.dest_y = new_dest_y
+                # check the path for the last point which is the destination set last time
+                new_dest_x, new_dest_y = self.find_path_to(self.dest_x[-1] + self.offset_x, self.dest_y[-1] + self.offset_y)
 
-        timeTaken = time.time() - occTime
-        self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
+                if len(new_dest_x) == 0:
+                    # set linear to be zero
+                    linear_msg = Int8()
+                    linear_msg.data = 0
+                    self.linear_publisher.publish(linear_msg)
+
+                    # set delta angle = 0 to stop
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = 0.0
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    
+                    self.dest_x.clear()
+                    self.dest_y.clear()
+                    self.get_logger().info('[occ_callback]: no path found get back to magicState: %s' % self.magicState)
+                    self.state = self.magicState
+                    return
+
+                # remove the current position which lies at the front of array
+                if len(new_dest_x) > 1:
+                    new_dest_x = new_dest_x[1:]
+                    new_dest_y = new_dest_y[1:]
+
+                # compare the new path with the old path
+                if new_dest_x != self.dest_x or new_dest_y != self.dest_y:
+                    self.get_logger().info('[occ_callback]: path updated')
+                    # if the first target point changes, stop once and move again
+                    if new_dest_x[0] != self.dest_x[0] or new_dest_y[0] != self.dest_y[0]:
+                        # set linear to be zero
+                        linear_msg = Int8()
+                        linear_msg.data = 0
+                        self.linear_publisher.publish(linear_msg)
+
+                        # set delta angle = 0 to stop
+                        deltaAngle_msg = Float64()
+                        deltaAngle_msg.data = 0.0
+                        self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                        self.move_straight_to(new_dest_x[0], new_dest_y[0])
+                    # update target points
+                    self.dest_x = new_dest_x
+                    self.dest_y = new_dest_y
+
+            timeTaken = time.time() - occTime
+            self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
 
     def pos_callback(self, msg):
         # Note: those values are different from the values obtained from odom
@@ -571,13 +575,13 @@ class MasterNode(Node):
         self.stateList = ["idle", 
                           "maze_rotating", 
                           "maze_moving", 
-                          "escape_wall_lmao", 
-                          "naive_frontier_finding_point",
-                          "naive_frontier_checking",
-                          "naive_front_rotating_to_frontier",
-                          "naive_front_moving_to_frontier",
-                          "naive_back_rotating_to_frontier",
-                          "naive_back_moving_to_frontier",
+                        #   "escape_wall_lmao", 
+                        #   "naive_frontier_finding_point",
+                        #   "naive_frontier_checking",
+                        #   "naive_front_rotating_to_frontier",
+                        #   "naive_front_moving_to_frontier",
+                        #   "naive_back_rotating_to_frontier",
+                        #   "naive_back_moving_to_frontier",
                           "frontier_search", 
                           "move_to_hallway", 
                           "http_request", 
@@ -645,29 +649,21 @@ class MasterNode(Node):
             
         self.get_logger().info('[masterFSM]: self.state: %s, self.magicState %s' % (self.state, self.magicState))
 
-        # check if the robot is stuck in map and in frontier search
-        # unmapped/obstacle is 0, open space 1
-        wall = np.where(self.dilutedOccupancyMap == OBSTACLE, 1, 0)
-        if (self.state == "maze_rotating" or self.state == "maze_moving") and wall[self.boty_pixel][self.botx_pixel]:
-            # self.get_logger().info('[masterFSM]: ahhh stuck in wall')
-            # self.state = "escape_wall_lmao"
-            pass
-        else:
-            if self.magicState == "frontier_search" and self.frontierPoints == []:
-                self.get_logger().info('[masterFSM]: no more frontier points go to wait_for_frontier')
-                self.state = self.magicState = "wait_for_frontier"
-                self.lastWaitForFrontier = time.time()
-                
-                # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+        if self.magicState == "frontier_search" and self.frontierPoints == []:
+            self.get_logger().info('[masterFSM]: no more frontier points go to wait_for_frontier')
+            self.state = self.magicState = "wait_for_frontier"
+            self.lastWaitForFrontier = time.time()
+            
+            # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
+            # set linear to be zero
+            linear_msg = Int8()
+            linear_msg.data = 0
+            self.linear_publisher.publish(linear_msg)
 
-                # set delta angle = 0 to stop
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
+            # set delta angle = 0 to stop
+            deltaAngle_msg = Float64()
+            deltaAngle_msg.data = 0.0
+            self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
         listStateIgnoreForObstacle = ["idle", 
                                       "checking_walls_distance",
@@ -675,14 +671,15 @@ class MasterNode(Node):
                                       "rotating_to_bucket",
                                       "moving_to_bucket",
                                       "releasing",
+                                      "maze_rotating",
                                       ]
                 
-        if self.magicState not in listStateIgnoreForObstacle:
+        if self.state not in listStateIgnoreForObstacle:
             # if obstacle in front and close to both sides, rotate to move between the two
             if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
                     or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
                     or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
-                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])):
+                    or np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
                 self.get_logger().warn('[masterFSM]: ahhh wall to close to front uwu')
 
                 # set linear to be zero
@@ -695,18 +692,58 @@ class MasterNode(Node):
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
-                # move backward for 0.2 sec as long as butt has space
+                # move backward for 0.5 sec as long as butt has space
                 linear_msg.data = -self.linear_speed
                 self.linear_publisher.publish(linear_msg)
                 start = time.time()
-                while (time.time() - start < 0.2) \
+                while (time.time() - start < 0.3) \
                     and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
                     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
                     pass
                 
                 linear_msg.data = 0
                 self.linear_publisher.publish(linear_msg)
+                
+                anglularVel_msg = Int8()
+                
+                # rotate to next point if have next point else just rotate to away from the close one
+                if len(self.dest_y) > 1:
+                    target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
+                            180 / math.pi)
 
+                    deltaAngle = target_yaw - self.yaw
+
+                    self.get_logger().info('[masterFSM]: align to next dest: %f' % deltaAngle)
+
+                    linear_msg = Int8()
+                    linear_msg.data = 0
+                    self.linear_publisher.publish(linear_msg)
+
+                    # set delta angle to rotate to target angle
+                    deltaAngle_msg = Float64()
+                    deltaAngle_msg.data = deltaAngle * 1.0
+                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                    self.state = "maze_rotating"
+                
+                else:
+                    self.get_logger().info('[masterFSM]: rotate away from close one')
+                    
+                    # rotate to away from the close one for 0.5 sec
+                    if np.nanmean(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmean(self.laser_range[self.mazeFrontRightindex:]):
+                        anglularVel_msg.data = -120
+                    else:
+                        anglularVel_msg.data = 120
+                        
+                    self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    start = time.time()
+                    while (time.time() - start < 0.75):
+                        pass
+                
+                    anglularVel_msg.data = 0
+                    self.anglularVel_publisher.publish(anglularVel_msg)
+                
                 # get rid of point that is too close to wall in the first place and take the next one
                 # cannot take final one if its like thru a wall
                 self.dest_x.clear()
@@ -741,6 +778,9 @@ class MasterNode(Node):
             boolCurve_msg = Int8()
             boolCurve_msg.data = 0
             self.boolCurve_publisher.publish(boolCurve_msg)
+            
+            # reset to not disable OCC callback
+            self.disableOCC = False
 
         elif self.state == "maze_rotating":
              # self.get_logger().info('current yaw: %f' % self.yaw)
@@ -792,48 +832,65 @@ class MasterNode(Node):
                     self.move_straight_to(self.dest_x[0], self.dest_y[0])
                 return
 
-            # if obstacle in front and close to both sides, rotate to move between the two
-            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
-                    or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
-                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
-                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])):
-                self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
+            # # if obstacle in front and close to both sides, rotate to move between the two
+            # if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+            #         or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+            #         or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+            #         or np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
+            #     self.get_logger().warn('[maze_moving]: ahhh wall to close to front uwu')
 
-                # set linear to be zero
-                linear_msg = Int8()
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
+            #     # set linear to be zero
+            #     linear_msg = Int8()
+            #     linear_msg.data = 0
+            #     self.linear_publisher.publish(linear_msg)
 
-                # set delta angle = 0 to stop
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
+            #     # set delta angle = 0 to stop
+            #     deltaAngle_msg = Float64()
+            #     deltaAngle_msg.data = 0.0
+            #     self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
-                # move backward for 0.2 sec as long as butt has space
-                linear_msg.data = -self.linear_speed
-                self.linear_publisher.publish(linear_msg)
-                start = time.time()
-                while (time.time() - start < 0.3) \
-                    and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
-                    and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
-                    pass
+            #     # move backward for 0.5 sec as long as butt has space
+            #     linear_msg.data = -self.linear_speed
+            #     self.linear_publisher.publish(linear_msg)
+            #     start = time.time()
+            #     while (time.time() - start < 0.5) \
+            #         and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
+            #         and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
+            #         pass
                 
-                linear_msg.data = 0
-                self.linear_publisher.publish(linear_msg)
-
-                # get rid of point that is too close to wall in the first place and take the next one
-                # cannot take final one if its like thru a wall
-                self.dest_x.clear()
-                self.dest_y.clear()
+            #     linear_msg.data = 0
+            #     self.linear_publisher.publish(linear_msg)
                 
-                self.get_logger().warn(
-                    '[maze_moving]: get back to magicState: %s' % self.magicState)
-                self.state = self.magicState
-                return
+            #     anglularVel_msg = Int8()
+                
+            #     # rotate to away from the close one for 0.5 sec
+            #     if np.nanmean(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmean(self.laser_range[self.mazeFrontRightindex:]):
+            #         anglularVel_msg.data = -100
+            #     else:
+            #         anglularVel_msg.data = 100
+                    
+            #     self.anglularVel_publisher.publish(anglularVel_msg)
+                
+            #     start = time.time()
+            #     while (time.time() - start < 0.5):
+            #         pass
+                
+            #     anglularVel_msg.data = 0
+            #     self.anglularVel_publisher.publish(anglularVel_msg)
 
-            else:
-                # else just increment counter for re orient
-                self.recalc_stat += 1
+            #     # get rid of point that is too close to wall in the first place and take the next one
+            #     # cannot take final one if its like thru a wall
+            #     self.dest_x.clear()
+            #     self.dest_y.clear()
+                
+            #     self.get_logger().warn(
+            #         '[maze_moving]: get back to magicState: %s' % self.magicState)
+            #     self.state = self.magicState
+            #     return
+
+            # else:
+            # else just increment counter for re orient
+            self.recalc_stat += 1
 
             # recalculate target angle if reach recalc_freq
             # this takes care both for obstacles and re aiming to target coords
@@ -862,45 +919,45 @@ class MasterNode(Node):
 
                     self.state = "maze_rotating"
 
-        elif self.state == "escape_wall_lmao":
-            # dequeue all bullshit in dest
-            self.dest_x = []
-            self.dest_y = []
+        # elif self.state == "escape_wall_lmao":
+        #     # dequeue all bullshit in dest
+        #     self.dest_x = []
+        #     self.dest_y = []
 
-            # Find the nearest free pixel
-            free_pixels = np.where(self.dilutedOccupancyMap == OPEN)
-            distances = np.sqrt((free_pixels[0] - self.boty_pixel) ** 2 + (free_pixels[1] - self.botx_pixel) ** 2)
-            minIndex = np.argmin(distances)
+        #     # Find the nearest free pixel
+        #     free_pixels = np.where(self.dilutedOccupancyMap == OPEN)
+        #     distances = np.sqrt((free_pixels[0] - self.boty_pixel) ** 2 + (free_pixels[1] - self.botx_pixel) ** 2)
+        #     minIndex = np.argmin(distances)
 
-            # cannot use move_to since its stuck in a wall
-            # use move_straight_to instead
-            self.dest_x = [free_pixels[1][minIndex]]
-            self.dest_y = [free_pixels[0][minIndex]]
-            self.get_logger().info(
-                '[escape_wall_lmao]: currently at (%d, %d) moving to nearest free pixel: (%d, %d)' % (
-                self.botx_pixel, self.boty_pixel, self.dest_x[0], self.dest_y[0]))
+        #     # cannot use move_to since its stuck in a wall
+        #     # use move_straight_to instead
+        #     self.dest_x = [free_pixels[1][minIndex]]
+        #     self.dest_y = [free_pixels[0][minIndex]]
+        #     self.get_logger().info(
+        #         '[escape_wall_lmao]: currently at (%d, %d) moving to nearest free pixel: (%d, %d)' % (
+        #         self.botx_pixel, self.boty_pixel, self.dest_x[0], self.dest_y[0]))
 
-            # if free pixel is behind (90, 270), reverse first
-            # else use move_straight_to to move to the free pixel
-            target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
-                        180 / math.pi)
-            deltaAngle = target_yaw - self.yaw
+        #     # if free pixel is behind (90, 270), reverse first
+        #     # else use move_straight_to to move to the free pixel
+        #     target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
+        #                 180 / math.pi)
+        #     deltaAngle = target_yaw - self.yaw
 
-            if deltaAngle > 90 or deltaAngle < -90:
-                # set linear to be reverse
-                linear_msg = Int8()
-                linear_msg.data = -self.linear_speed
-                self.linear_publisher.publish(linear_msg)
+        #     if deltaAngle > 90 or deltaAngle < -90:
+        #         # set linear to be reverse
+        #         linear_msg = Int8()
+        #         linear_msg.data = -self.linear_speed
+        #         self.linear_publisher.publish(linear_msg)
 
-                # set delta angle to 0
-                deltaAngle_msg = Float64()
-                deltaAngle_msg.data = 0.0
-                self.deltaAngle_publisher.publish(deltaAngle_msg)
+        #         # set delta angle to 0
+        #         deltaAngle_msg = Float64()
+        #         deltaAngle_msg.data = 0.0
+        #         self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-                # set to maze_moving to move until the free pixel
-                self.state = "maze_moving"
-            else:
-                self.move_straight_to(self.dest_x[0], self.dest_y[0])
+        #         # set to maze_moving to move until the free pixel
+        #         self.state = "maze_moving"
+        #     else:
+        #         self.move_straight_to(self.dest_x[0], self.dest_y[0])
 
         elif self.state == "frontier_search":
             # # compare two frontier points and judge which we go first
@@ -1146,6 +1203,9 @@ class MasterNode(Node):
                 boolCurve_msg.data = 1
                 self.boolCurve_publisher.publish(boolCurve_msg)
                 
+                # disable OCC callbacks since after entering it will not be used
+                self.disableOCC = True
+                
                 # # temp
                 # self.state = self.magicState = "idle"
             
@@ -1181,6 +1241,9 @@ class MasterNode(Node):
                 boolCurve_msg = Int8()
                 boolCurve_msg.data = 1
                 self.boolCurve_publisher.publish(boolCurve_msg)
+                
+                # disable OCC callbacks since after entering it will not be used
+                self.disableOCC = True
                 
                 # # temp
                 # self.state = self.magicState = "idle"
@@ -1792,7 +1855,7 @@ class MasterNode(Node):
 
                 # skip if it is not reachable
                 if self.dist[middle_y][middle_x] >= FRONTIER_SKIP_THRESHOLD:
-                    self.get_logger().info('[frontierSearch]: point (%d %d) is too far; skipped' % (middle_x, middle_y))
+                    self.get_logger().info('[frontierSearch]: point (%d %d) is too far at %f; skipped' % (middle_x, middle_y, self.dist[middle_y][middle_x]))
                     continue
 
                 self.frontierPoints.append((middle_x, middle_y))
