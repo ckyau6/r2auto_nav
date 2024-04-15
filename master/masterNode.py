@@ -67,11 +67,6 @@ MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 MAZE_CLEARANCE_ANGLE = 10
 MAZE_ROTATE_SPEED = 64
 
-# left, right door and finish line coords in meters from the magic origin
-LEFT_DOOR_COORDS_M = (1.20, 2.70)
-RIGHT_DOOR_COORDS_M = (1.90, 2.70)
-FINISH_LINE_M = ((LEFT_DOOR_COORDS_M[0] + RIGHT_DOOR_COORDS_M[0])/2, 2.10)
-
 UNMAPPED = 1
 OPEN = 2
 OBSTACLE = 3
@@ -92,8 +87,36 @@ FRONTIER_SKIP_THRESHOLD = 1e9
 # distance to two points to be considered sorted by lower y, in meter
 FRONTIER_DIST_M = 0.10
 
+# radius around bot to be visited, in meter
+VISIT_RADIUS_M = 0.4
+
 # time in s to wait after no more frontier before goin to hall way
 WAIT_FRONTIER = 10
+
+# cost to avoid must visit points that is across the wall
+VISIT_COST = 1e9
+
+# left, right door and finish line coords in meters from the magic origin (starting point roughly 20cm from walls three sides)
+LEFT_DOOR_COORDS_M = (1.20, 2.70)
+RIGHT_DOOR_COORDS_M = (1.90, 2.70)
+FINISH_LINE_M = ((LEFT_DOOR_COORDS_M[0] + RIGHT_DOOR_COORDS_M[0])/2, 2.10)
+
+# must check points
+# as doing frontier searching, if one of these points are better than other frontier, frontier will give these points
+# there will be cost check on these points incase it landed on a unreachable point due to maze elements, but the cost to give up must be much higher than frontier (cannot give these points up unless really necessary)
+# these points are cleared if the pixel is mapped (OPEN or OBSTACLE)
+
+# map is X = 3.5, Y = 3.5, with room at y = 2.1
+
+# make a dot grid that spans X = 3.5 and Y = 2.1, starting from 0.2, 0.2
+# Define the start, end, and step for X and Y
+start_x, end_x, no_x = 0, 3.1, 10
+start_y, end_y, no_y = 0, 1.7, 10
+
+# Create the grid, must be last item bigges x and y
+MUST_VISIT_POINTS_M = [(x, y) for x in np.linspace(start_x, end_x, no_x) for y in np.linspace(start_y, end_y, no_y)]
+
+MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 100
 
 # speedssss
 LIN_MAX = 110
@@ -324,6 +347,14 @@ class MasterNode(Node):
                 self.d_cost[i] = 1
             else:
                 self.d_cost[i] = (71 / (101 - i) - 1) * 1e8 + 1
+                
+        self.bucketStarted = 0
+        
+        self.mustVisitPoints_m = MUST_VISIT_POINTS_M
+        
+        self.mustVisitPointsChecked_pixel = []
+        
+        self.frontierSkipThreshold = FRONTIER_SKIP_THRESHOLD
 
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
@@ -424,7 +455,10 @@ class MasterNode(Node):
         self.leftDoor_pixel = (round((LEFT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((LEFT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
         self.rightDoor_pixel = (round((RIGHT_DOOR_COORDS_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((RIGHT_DOOR_COORDS_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
         self.finishLine_pixel = (round((FINISH_LINE_M[0] - self.map_origin_x) / self.map_res) + self.offset_x, round((FINISH_LINE_M[1] - self.map_origin_y) / self.map_res) + self.offset_y)
-
+        
+        # MUST_VISIT_POINTS_M
+        self.mustVisitPoints_pixel = [(round((x - self.map_origin_x) / self.map_res) + self.offset_x, round((y - self.map_origin_y) / self.map_res) + self.offset_y) for x, y in self.mustVisitPoints_m]
+        
         if self.disableOCC == False:
             self.get_logger().info('[occ_callback]: occ enabled')
             
@@ -451,7 +485,7 @@ class MasterNode(Node):
             # 2 = mapped and open
             # 3 = mapped and obstacle
             self.occupancyMap = np.uint8(binnum.reshape(msg.info.height, msg.info.width))
-
+            
             # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
             # pixelExpend = numbers of pixel to expend by
             pixelExpend = math.ceil(CLEARANCE_RADIUS / (self.map_res * 100))
@@ -473,7 +507,11 @@ class MasterNode(Node):
 
             # Apply the dilation only within the OPEN areas
             self.dilutedOccupancyMap = np.where((dilated & open_mask), OBSTACLE, self.occupancyMap)
-
+            
+            # check if must visit poiints are in the map if yes then:
+            # if must visit points are not unmapped, then remove them
+            self.mustVisitPointsChecked_pixel = [(x, y) for x, y in self.mustVisitPoints_pixel if not (0 < x < self.map_w and 0 < y < self.map_h and (self.dilutedOccupancyMap[y][x] == OPEN or self.dilutedOccupancyMap[y][x] == OBSTACLE))]
+            
             # Normalize the values to the range [0, 1]
             # self.oriorimap /= 100.0
 
@@ -534,7 +572,7 @@ class MasterNode(Node):
                 #     self.get_logger().info('[occ_callback]: occ_callback took: %s' % timeTaken)
                 #     return
                 
-                if self.magicState == "frontier_search" and self.dist[self.dest_y[-1] + self.offset_y][self.dest_x[-1] + self.offset_x] > FRONTIER_SKIP_THRESHOLD:
+                if self.magicState == "frontier_search" and self.dist[self.dest_y[-1] + self.offset_y][self.dest_x[-1] + self.offset_x] > self.frontierSkipThreshold:
                     # set linear to be zero
                     self.linear_msg.data = 0
                     self.linear_publisher.publish(self.linear_msg)
@@ -624,7 +662,8 @@ class MasterNode(Node):
                         #   "naive_front_moving_to_frontier",
                         #   "naive_back_rotating_to_frontier",
                         #   "naive_back_moving_to_frontier",
-                          "frontier_search", 
+                          "frontier_search",
+                          "visiting_must_visit",
                           "move_to_hallway", 
                           "http_request", 
                           "go_to_left_door", 
@@ -693,11 +732,10 @@ class MasterNode(Node):
             
         self.get_logger().info('[masterFSM]: self.state: %s, self.magicState %s' % (self.state, self.magicState))
 
-        # if no more frontier and its in frontier search means done and go to wait_for_frontier
+        # if no more frontier and its in frontier search means done and go to visiting_must_visit
         if self.magicState == "frontier_search" and self.frontierPoints == []:
-            self.get_logger().info('[masterFSM]: no more frontier points go to wait_for_frontier')
-            self.state = self.magicState = "wait_for_frontier"
-            self.lastWaitForFrontier = time.time()
+            self.get_logger().info('[masterFSM]: no more frontier points go to visiting_must_visit')
+            self.state = self.magicState = "visiting_must_visit"
             
             # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
             # set linear to be zero
@@ -708,6 +746,25 @@ class MasterNode(Node):
             deltaAngle_msg = Float64()
             deltaAngle_msg.data = 0.0
             self.deltaAngle_publisher.publish(deltaAngle_msg)
+            
+            # call for new map again before going visiting_must_visit so the must visit points are updated
+            # enable occCallback
+            self.disableOCC = False
+            
+            # set newOccFlag to False
+            self.newOccFlag = False
+            
+        # if no more must visit points and its in visiting_must_visit means really done so go to wait_for_frontier
+        if self.magicState == "visiting_must_visit" and self.frontierPoints == []:
+            self.get_logger().info('[masterFSM]: no more points to visit go to wait_for_frontier')
+            self.state = self.magicState = "wait_for_frontier"
+            self.lastWaitForFrontier = time.time()
+            
+            # enable occCallback
+            self.disableOCC = False
+            
+            # set newOccFlag to False
+            self.newOccFlag = False
             
         # if finding hallway but cutting through wall, and frontier pops up, then go back to frontier search
         if self.magicState == "move_to_hallway" and self.frontierPoints != []:
@@ -1061,7 +1118,7 @@ class MasterNode(Node):
         #     else:
         #         self.move_straight_to(self.dest_x[0], self.dest_y[0])
 
-        elif self.state == "frontier_search":
+        elif self.state == "frontier_search" or self.state == "visiting_must_visit":
             # # compare two frontier points and judge which we go first
             # # return True if p1 has higher priority than p2
             # def cmp(p1, p2):
@@ -1079,10 +1136,22 @@ class MasterNode(Node):
 
             self.move_to(destination[0], destination[1])
             
+            # visiting_must_visit is for:
+            # for must visit points that had not been visited, it will be added to fronieterPoints by the frontierSearch functions
+            # frontierSearch functions check if the state is visiting_must_visit before adding must visit to frontierPoints
+            # mean while if there is any other actual frontier points, it will be added to frontierPoints as well
+            # once all must visit points are visited, it will go to wait_for_frontier
+            
         elif self.state == "wait_for_frontier":
             # after WAIT_FRONTIER sec, go to move_to_hallway
             
             self.get_logger().info('[wait_for_frontier]: waitng until %f, now is %f' % (WAIT_FRONTIER, time.time() - self.lastWaitForFrontier))
+            
+            # enable occCallback
+            self.disableOCC = False
+            
+            # set newOccFlag to False
+            self.newOccFlag = False
             
             if len(self.frontierPoints) > 0:
                 self.get_logger().info('[wait_for_frontier]: frontier points found go to frontier_search')
@@ -1123,12 +1192,13 @@ class MasterNode(Node):
                                 
                 return
                 
-            # check if hallway is even in map, if its not, means frontier has not been fully explored, go back to frontier search
+            # check if hallway is even in map or if its open in map, if its not, means frontier has not been fully explored, go back to frontier search
             # froniter search changes as confidence in map changes hence sometime when there is no more frontier, but after some time, there is more
-            if self.finishLine_pixel[0] < 0 or self.finishLine_pixel[1] < 0 or self.finishLine_pixel[0] >= self.map_w or self.finishLine_pixel[1] >= self.map_h:
+            if self.finishLine_pixel[0] < 0 or self.finishLine_pixel[1] < 0 or self.finishLine_pixel[0] >= self.map_w or self.finishLine_pixel[1] >= self.map_h or self.dilutedOccupancyMap[self.finishLine_pixel[1], self.finishLine_pixel[0]] == UNMAPPED:
                 self.state = self.magicState = "frontier_search"
                 
-                FRONTIER_SKIP_THRESHOLD = FRONTIER_SKIP_THRESHOLD * 0.9
+                # make it more sensative to frontiers
+                self.frontierSkipThreshold = self.frontierSkipThreshold * 0.9
                 
                 # enable occCallback
                 self.disableOCC = False
@@ -1136,7 +1206,7 @@ class MasterNode(Node):
                 # set newOccFlag to False
                 self.newOccFlag = False
                 
-                self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable is not in map, FRONTIER_SKIP_THRESHOLD = %f' % (self.finishLine_pixel[0], self.finishLine_pixel[1], FRONTIER_SKIP_THRESHOLD))
+                self.get_logger().warn('[move_to_hallway]: finishLine_pixel: (%d, %d) is not reachable is not in map, self.frontierSkipThreshold = %f' % (self.finishLine_pixel[0], self.finishLine_pixel[1], self.frontierSkipThreshold))
                 
             else:
                 # check if hall way is reachable
@@ -1694,7 +1764,10 @@ class MasterNode(Node):
 
                 # send to moving_to_bucket to wait for rotation to finish
                 self.state = self.magicState = "moving_to_bucket"
-
+                
+                # start bucket timer
+                self.bucketStarted = time.time()
+                
                 # on limit switch
                 switch_msg = String()
                 switch_msg.data = "activate"
@@ -1705,34 +1778,43 @@ class MasterNode(Node):
                 self.get_logger().info('[moving_to_bucket]: still rotating, waiting')
                 pass
             else:
-                # set linear to be self.linear_speed to move forward fastest
-                self.linear_msg.data = 75
-                self.linear_publisher.publish(self.linear_msg)
+                # if after 30s still not hit, change back to checking_walls_distance
+                if time.time() - self.bucketStarted < 30:
+                    self.linear_msg.data = 75
+                    self.linear_publisher.publish(self.linear_msg)
 
-                # if the bucket is in the to the right, turn left slightly
-                anglularVel_msg = Int8()
-                
-                # bucket angle becomes unreliable at close range so if the bucket is close enough, just go straight
-                
-                if any(self.laser_range[0:self.bucketFrontLeftIndex] < 0.30) or any(self.laser_range[self.bucketFrontRightIndex:] < 0.30):
-                    anglularVel_msg.data = 0
-                    self.get_logger().info('[moving_to_bucket]: too close, just moving forward')
-                else:
-                    if self.bucketAngle > 5 and self.bucketAngle < 180:
-                        anglularVel_msg.data = 100
-                        self.get_logger().info('[moving_to_bucket]: moving forward and left')
-                    elif self.bucketAngle < 355 and self.bucketAngle > 180:
-                        anglularVel_msg.data = -100
-                        self.get_logger().info('[moving_to_bucket]: moving forward and right')
-                    else:
+                    # if the bucket is in the to the right, turn left slightly
+                    anglularVel_msg = Int8()
+                    
+                    # bucket angle becomes unreliable at close range so if the bucket is close enough, just go straight
+                    
+                    if any(self.laser_range[0:self.bucketFrontLeftIndex] < 0.30) or any(self.laser_range[self.bucketFrontRightIndex:] < 0.30):
                         anglularVel_msg.data = 0
-                        self.get_logger().info('[moving_to_bucket]: moving forward')
+                        self.get_logger().info('[moving_to_bucket]: too close, just moving forward')
+                    else:
+                        if self.bucketAngle > 5 and self.bucketAngle < 180:
+                            anglularVel_msg.data = 100
+                            self.get_logger().info('[moving_to_bucket]: moving forward and left')
+                        elif self.bucketAngle < 355 and self.bucketAngle > 180:
+                            anglularVel_msg.data = -100
+                            self.get_logger().info('[moving_to_bucket]: moving forward and right')
+                        else:
+                            anglularVel_msg.data = 0
+                            self.get_logger().info('[moving_to_bucket]: moving forward')
 
-                self.anglularVel_publisher.publish(anglularVel_msg)
+                    self.anglularVel_publisher.publish(anglularVel_msg)
 
-                # if the bucket is hit, the state transition and stopping will be done by the switch_listener_callback
-            pass
-
+                    # if the bucket is hit, the state transition and stopping will be done by the switch_listener_callback
+                    pass
+                else:
+                    # off limit switch
+                    switch_msg = String()
+                    switch_msg.data = "deactivate"
+                    self.switch_publisher.publish(switch_msg)
+                    
+                    # change state back to checking_walls_distance
+                    self.state = self.magicState = "checking_walls_distance"
+                    
         elif self.state == "releasing":
             servoAngle_msg = UInt8()
             servoAngle_msg.data = 180
@@ -1755,6 +1837,10 @@ class MasterNode(Node):
                 
                 # PLOT_ORI = False
                 # PLOT_DILUTED = True
+                # PLOT_PROCESSED = False
+                
+                # PLOT_ORI = True
+                # PLOT_DILUTED = False
                 # PLOT_PROCESSED = False
                 
                 # Pixel values
@@ -1855,7 +1941,7 @@ class MasterNode(Node):
                     TARGET_SIZE_M = 5
                     
                     # must add 10 otherwise cant plot the far point
-                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0]) + 10
+                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0], self.mustVisitPointsChecked_pixel[-1][1], self.mustVisitPointsChecked_pixel[-1][0]) + 10
 
                     # Calculate the necessary padding
                     padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
@@ -1876,6 +1962,10 @@ class MasterNode(Node):
                         totalMap_rgb[self.leftDoor_pixel[1]][self.leftDoor_pixel[0]] = (50, 205, 50)
                         totalMap_rgb[self.rightDoor_pixel[1]][self.rightDoor_pixel[0]] = (50, 205, 50)
                         totalMap_rgb[self.finishLine_pixel[1]][self.finishLine_pixel[0]] = (50, 205, 50)
+                        
+                        # plot the must visit points
+                        for x, y in self.mustVisitPointsChecked_pixel:
+                            totalMap_rgb[y][x] = (50, 205, 50)
                     except:
                         self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
                         
@@ -1906,7 +1996,7 @@ class MasterNode(Node):
 
                     # cmap = ListedColormap(['black', 'red', 'gray'])
                     # plt.imshow(self.processedOcc, cmap='gray', origin='lower')
-                    plt.imshow(self.oriorimap, cmap=cmap, origin='lower')
+                    plt.imshow(self.oriorimap, cmap='gray', origin='lower')
 
                     plt.draw_all()
                     # pause to make sure the plot gets created
@@ -2173,12 +2263,71 @@ class MasterNode(Node):
                 middle_y = sorted(y_coords)[len(y_coords) // 2]
 
                 # skip if it is not reachable
-                if self.dist[middle_y][middle_x] >= FRONTIER_SKIP_THRESHOLD:
-                    self.get_logger().info('[frontierSearch]: point (%d %d) is too far at %f; skipped' % (middle_x, middle_y, self.dist[middle_y][middle_x]))
+                if self.dist[middle_y][middle_x] >= self.frontierSkipThreshold:
+                    self.get_logger().info('[frontierSearch]: frontier point (%d %d) is too far at %f; skipped' % (middle_x, middle_y, self.dist[middle_y][middle_x]))
                     continue
 
                 self.frontierPoints.append((middle_x, middle_y))
+                
+            if self.magicState == "visiting_must_visit":
+                # skip must visit points if its beyond MUST_VISIT_COST, other wise add to frontier points to be considered for path planning
+                for point in self.mustVisitPointsChecked_pixel:
+                    # check if must visit poiints are in the map
+                    if 0 < point[0] < self.map_w and 0 < point[1] < self.map_h:
+                        
+                        # this is to avoid point thick walls
+                        if self.dist[point[1]][point[0]] >= MUST_VISIT_COST:
+                            self.get_logger().info('[frontierSearch]: must visit point (%d %d) is too far at %f; skipped' % (point[0], point[1], self.dist[point[1]][point[0]]))
+                        else:
+                            self.frontierPoints.append(point)
+                
+            # # Current position
+            # curr_pos = np.array([self.botx_pixel, self.boty_pixel])
+            
+            # # if the cost is low, means not across wall 
+            
+            # # if froniter is a certain radius from the robot 
+            # #   filter away those will high cost (if next to robot and still high cost means crossing wall)
+            # #   then sort by distance from current position, 
+            # #   this will explore the points around the robot
+            # # else sort by lower y value first (explore place further from hallway first)
+            
+            # if all(np.linalg.norm(curr_pos - np.array(point)) < VISIT_RADIUS_M / self.map_res for point in self.frontierPoints):
+            #     # filter away those will high cost
+            #     self.frontierPoints = [point for point in self.frontierPoints if self.dist[point[1]][point[0]] < VISIT_COST]
+                
+            #     # sort by distance away from current position
+            #     self.get_logger().info('[frontierSearch]: sort by distance away from curr')
+                
+            #     def cmp_points(a, b):
+            #         d_to_a = np.linalg.norm(curr_pos - np.array(a))
+            #         d_to_b = np.linalg.norm(curr_pos - np.array(b))
+            #         if d_to_a == d_to_b:
+            #             return 0
+            #         return -1 if d_to_a < d_to_b else 1
 
+            #     self.frontierPoints.sort(key=cmp_to_key(cmp_points))
+                
+            #     if len(self.frontierPoints) >= 2:
+            #         # if the first two points distance are closer than FRONTIER_DIST_M, sort by lower y value first
+            #         d0 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[0]))
+            #         d1 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[1]))
+                    
+            #         if abs(d0 - d1) < FRONTIER_DIST_M / self.map_res:
+            #             # comapre y values
+            #             if self.frontierPoints[0][1] > self.frontierPoints[1][1]:
+            #                 self.frontierPoints[0], self.frontierPoints[1] = self.frontierPoints[1], self.frontierPoints[0]
+                            
+            #         # to hope to prevent oscillatory behavior
+            #         self.get_logger().info('[frontierSearch]: distance closest two points')
+                             
+            # else:
+            #     # sort by y
+            #     self.get_logger().info('[frontierSearch]: sort by y')
+                
+            #     self.frontierPoints = sorted(self.frontierPoints, key=lambda point: point[1])
+                
+                
             # sort points by distance from current position
             # Current position
             curr_pos = np.array([self.botx_pixel, self.boty_pixel])
