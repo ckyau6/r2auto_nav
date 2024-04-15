@@ -60,7 +60,7 @@ BACK_ANGLE_RANGE = 5
 BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
 BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
 
-MAZE_FRONT_RANGE = 25
+MAZE_FRONT_RANGE = 30
 MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
 MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 
@@ -97,8 +97,8 @@ WAIT_FRONTIER = 10
 VISIT_COST = 1e9
 
 # left, right door and finish line coords in meters from the magic origin (starting point roughly 20cm from walls three sides)
-LEFT_DOOR_COORDS_M = (1.20, 2.70)
-RIGHT_DOOR_COORDS_M = (1.90, 2.70)
+LEFT_DOOR_COORDS_M = (1.20-0.25, 2.70-0.2)
+RIGHT_DOOR_COORDS_M = (1.90+0.25, 2.70-0.2)
 FINISH_LINE_M = ((LEFT_DOOR_COORDS_M[0] + RIGHT_DOOR_COORDS_M[0])/2, 2.10)
 
 # must check points
@@ -120,7 +120,7 @@ MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 100
 
 # speedssss
 LIN_MAX = 120
-LIN_WHEN_CLOSE = 70
+LIN_WHEN_CLOSE = 50
 LIN_WHEN_ROTATING = 25
 
 # return the rotation angle around z axis in degrees (counterclockwise)
@@ -772,8 +772,8 @@ class MasterNode(Node):
             self.state = self.magicState = "frontier_search"
                 
         listStateIgnoreForObstacle = ["idle", 
-                                    #   "enter_to_left_door",
-                                    #   "enter_to_right_door",
+                                      "enter_to_left_door",
+                                      "enter_to_right_door",
                                       "checking_walls_distance",
                                       "rotating_to_move_away_from_walls",
                                       "rotating_to_bucket",
@@ -802,7 +802,7 @@ class MasterNode(Node):
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
                 # move backward for 0.5 sec as long as butt has space
-                self.linear_msg.data = -50
+                self.linear_msg.data = -LIN_WHEN_CLOSE
                 self.linear_publisher.publish(self.linear_msg)
                 start = time.time()
                 while (time.time() - start < 0.3) \
@@ -839,9 +839,9 @@ class MasterNode(Node):
                     
                     # rotate to away from the close one for 0.5 sec
                     if np.nanmean(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmean(self.laser_range[self.mazeFrontRightindex:]):
-                        anglularVel_msg.data = -120
+                        anglularVel_msg.data = -60
                     else:
-                        anglularVel_msg.data = 120
+                        anglularVel_msg.data = 60
                         
                     self.anglularVel_publisher.publish(anglularVel_msg)
                     
@@ -869,6 +869,20 @@ class MasterNode(Node):
                 
                 self.get_logger().info('[masterFSM]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
                 
+        # if running and close to somthing slow down else go back up
+        if self.linear_msg.data == LIN_WHEN_CLOSE or self.linear_msg.data == LIN_MAX:
+        # check distance and change speed
+        
+            if any(self.laser_range < NAV_TOO_CLOSE*1.1) \
+                        or any(self.laser_range < NAV_TOO_CLOSE*1.1) \
+                        or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+                        or np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
+                self.linear_msg.data = LIN_WHEN_CLOSE
+            else:
+                self.linear_msg.data = LIN_MAX
+                
+            self.linear_publisher.publish(self.linear_msg)
+                
         # if occ is enabled, means new values are wanted
         # so if newOccFlag is false, then need to wait until newOccFlag is true before procedding with whatever state it is in
         if self.newOccFlag == False and self.disableOCC == False:
@@ -887,18 +901,6 @@ class MasterNode(Node):
         else:
             self.get_logger().info('[masterFSM]: new occ map received can run')
             
-        # if running and close to somthing slow down else go back up
-        if self.linear_msg.data != 0:
-        # check distance and change speed
-        
-            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
-                        or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
-                        or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
-                        or np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
-                self.linear_msg.data = LIN_WHEN_CLOSE
-            else:
-                self.linear_msg.data = LIN_MAX
-                
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
             servoAngle_msg = UInt8()
@@ -941,7 +943,7 @@ class MasterNode(Node):
                     return
                 
                 # set linear to start moving forward
-                self.linear_msg.data = LIN_MAX
+                self.linear_msg.data = LIN_WHEN_CLOSE
                 self.linear_publisher.publish(self.linear_msg)
                 
                 self.state = "maze_moving"
@@ -1067,7 +1069,7 @@ class MasterNode(Node):
                 # else, rotate and move at the same time
                 if abs(deltaAngle) < 15:
                     pass
-                elif abs(deltaAngle) >= 90:
+                elif abs(deltaAngle) >= 45:
                     # set linear
                     self.linear_msg.data = 0
                     self.linear_publisher.publish(self.linear_msg)
@@ -1384,7 +1386,7 @@ class MasterNode(Node):
             if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
                 
                 # move forwad
-                self.linear_msg.data = LIN_MAX
+                self.linear_msg.data = LIN_WHEN_CLOSE
                 self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
@@ -1423,7 +1425,7 @@ class MasterNode(Node):
             if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
                 
                 # move forwad
-                self.linear_msg.data = LIN_MAX
+                self.linear_msg.data = LIN_WHEN_CLOSE
                 self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
@@ -1541,7 +1543,7 @@ class MasterNode(Node):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
 
                         # set linear to be self.linear_speed to move forward fastest
-                        self.linear_msg.data = LIN_MAX
+                        self.linear_msg.data = LIN_WHEN_CLOSE
                         self.linear_publisher.publish(self.linear_msg)
 
                         anglularVel_msg = Int8()
@@ -1788,10 +1790,13 @@ class MasterNode(Node):
             # if still rotating wait, else can move forward until hit bucket
             if self.robotControlNodeState == "rotateByAngle":
                 self.get_logger().info('[moving_to_bucket]: still rotating, waiting')
+                
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
                 pass
             else:
-                # if after 30s still not hit, change back to checking_walls_distance
-                if time.time() - self.bucketStarted < 30:
+                # if after 15s still not hit, change back to checking_walls_distance
+                if time.time() - self.bucketStarted < 15:
                     self.linear_msg.data = 37
                     self.linear_publisher.publish(self.linear_msg)
 
@@ -1841,182 +1846,193 @@ class MasterNode(Node):
             self.get_logger().error('state %s not defined' % self.state)
 
         ''' ================================================ DEBUG PLOT ================================================ '''
-        try:
-            if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 1:
-                PLOT_ORI = False
-                PLOT_DILUTED = False
-                PLOT_PROCESSED = True
+        # try:
+        if self.show_plot and len(self.dilutedOccupancyMap) > 0 and (time.time() - self.lastPlot) > 0.1:
+            PLOT_ORI = False
+            PLOT_DILUTED = False
+            PLOT_PROCESSED = True
+            
+            # PLOT_ORI = False
+            # PLOT_DILUTED = True
+            # PLOT_PROCESSED = False
+            
+            # PLOT_ORI = True
+            # PLOT_DILUTED = False
+            # PLOT_PROCESSED = False
+            
+            # Pixel values
+            ROBOT = 0
+            # UNMAPPED = 1
+            # OPEN = 2
+            # OBSTACLE = 3
+            MAGIC_ORIGIN = 4
+            ESTIMATE_DOOR = 5
+            FINISH_LINE = 6
+            FRONTIER = 7
+            FRONTIER_POINT = 8
+            PATH_PLANNING_POINT = 9
+
+            if PLOT_DILUTED == True:
+                # shows the diluted occupancy map with frontiers and path planning points
+                self.totalMap = self.dilutedOccupancyMap.copy()
+
+                # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
+                TARGET_SIZE_M = 5
+                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0])
+
+                # Calculate the necessary padding
+                padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
+                padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+
+                # Define the number of pixels to add to the height and width
+                padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+                padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+
+                # Pad the image
+                self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
+
+                try:
+                    # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
+                    self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
+                    self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
+
+                    self.totalMap[self.finishLine_pixel[1], self.finishLine_pixel[0]] = FINISH_LINE
+                except:
+                    self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
+
+                # Set the value of the frontier and the frontier points
+                for pixel in self.frontier:
+                    self.totalMap[pixel[0], pixel[1]] = FRONTIER
+
+                for pixel in self.frontierPoints:
+                    self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
+
+                # Set the value for the path planning points
+                for i in range(len(self.dest_x)):
+                    self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
+
+                colourList = ['black',
+                            (85/255, 85/255, 85/255),         # dark grey
+                            (170/255, 170/255, 170/255),      # light grey
+                            'white',
+                            (50/255, 205/255, 50/255),        # lime green
+                            (1, 1, 0),                        # yellow
+                            (0, 1, 0)                         # green
+                            ]
+
+                # add in colours for each type of pixel
+                if len(self.frontier) > 0:
+                    colourList.append((0, 1, 1))    # cyan
+
+                if len(self.frontierPoints) > 0:
+                    colourList.append((1, 0, 1))    # magenta
+
+                if len(self.dest_x) > 0:
+                    colourList.append((1, 165/255, 0))   # orange
+
+                # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+                self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
+
+                # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
+                self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
+
+                # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin
+
+                cmap = ListedColormap(colourList)
+
+                plt.imshow(self.totalMap, origin='lower', cmap=cmap)
+
+                plt.draw_all()
+                # pause to make sure the plot gets created
+                plt.pause(0.00000000001)
+            elif PLOT_PROCESSED == True:
+                self.totalMap = self.processedOcc.copy()
                 
-                # PLOT_ORI = False
-                # PLOT_DILUTED = True
-                # PLOT_PROCESSED = False
+                # Normalize the array to the range 0-255
+                totalMap_normalized = ((self.totalMap - 0) * (255 - 0) / (100 - 0)).astype(np.uint8)
+
+                # Convert the normalized array to integers
+                totalMap_int = totalMap_normalized.astype(np.uint8)
+
+                # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
+                TARGET_SIZE_M = 5
                 
-                # PLOT_ORI = True
-                # PLOT_DILUTED = False
-                # PLOT_PROCESSED = False
+                # find the max x and y in must visit
+                # need to check that its not empty
+                if len(self.mustVisitPointsChecked_pixel) > 0:
+                    # Find the maximum x and y values
+                    maxMustVisitPointsChecked_pixel_x = max(self.mustVisitPointsChecked_pixel, key=lambda point: point[0])[0]
+                    maxMustVisitPointsChecked_pixel_y = max(self.mustVisitPointsChecked_pixel, key=lambda point: point[1])[1]
+                else:
+                    # set to 0
+                    maxMustVisitPointsChecked_pixel_x = 0
+                    maxMustVisitPointsChecked_pixel_y = 0
+
+                # must add 10 otherwise cant plot the far point
+                TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0], maxMustVisitPointsChecked_pixel_x, maxMustVisitPointsChecked_pixel_y) + 10
+
+                # Calculate the necessary padding
+                padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
+                padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
+
+                # Define the number of pixels to add to the height and width
+                padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
+                padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
+
+                # Pad the image
+                totalMap_rgb = np.pad(totalMap_int, pad_width=(padding_height, padding_width), mode='constant', constant_values=0)
+
+                # Convert the single-channel grayscale image to a three-channel RGB image
+                totalMap_rgb = cv2.cvtColor(totalMap_rgb, cv2.COLOR_GRAY2BGR)
                 
-                # Pixel values
-                ROBOT = 0
-                # UNMAPPED = 1
-                # OPEN = 2
-                # OBSTACLE = 3
-                MAGIC_ORIGIN = 4
-                ESTIMATE_DOOR = 5
-                FINISH_LINE = 6
-                FRONTIER = 7
-                FRONTIER_POINT = 8
-                PATH_PLANNING_POINT = 9
-
-                if PLOT_DILUTED == True:
-                    # shows the diluted occupancy map with frontiers and path planning points
-                    self.totalMap = self.dilutedOccupancyMap.copy()
-
-                    # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
-                    TARGET_SIZE_M = 5
-                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0])
-
-                    # Calculate the necessary padding
-                    padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
-                    padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
-
-                    # Define the number of pixels to add to the height and width
-                    padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
-                    padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
-
-                    # Pad the image
-                    self.totalMap = np.pad(self.totalMap, pad_width=(padding_height, padding_width), mode='constant', constant_values=UNMAPPED)
-
-                    try:
-                        # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
-                        self.totalMap[self.leftDoor_pixel[1], self.leftDoor_pixel[0]] = ESTIMATE_DOOR
-                        self.totalMap[self.rightDoor_pixel[1], self.rightDoor_pixel[0]] = ESTIMATE_DOOR
-
-                        self.totalMap[self.finishLine_pixel[1], self.finishLine_pixel[0]] = FINISH_LINE
-                    except:
-                        self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
-
-                    # Set the value of the frontier and the frontier points
-                    for pixel in self.frontier:
-                        self.totalMap[pixel[0], pixel[1]] = FRONTIER
-
-                    for pixel in self.frontierPoints:
-                        self.totalMap[pixel[1], pixel[0]] = FRONTIER_POINT
-
-                    # Set the value for the path planning points
-                    for i in range(len(self.dest_x)):
-                        self.totalMap[self.dest_y[i]][self.dest_x[i]] = PATH_PLANNING_POINT
-
-                    colourList = ['black',
-                                (85/255, 85/255, 85/255),         # dark grey
-                                (170/255, 170/255, 170/255),      # light grey
-                                'white',
-                                (50/255, 205/255, 50/255),        # lime green
-                                (1, 1, 0),                        # yellow
-                                (0, 1, 0)                         # green
-                                ]
-
-                    # add in colours for each type of pixel
-                    if len(self.frontier) > 0:
-                        colourList.append((0, 1, 1))    # cyan
-
-                    if len(self.frontierPoints) > 0:
-                        colourList.append((1, 0, 1))    # magenta
-
-                    if len(self.dest_x) > 0:
-                        colourList.append((1, 165/255, 0))   # orange
-
-                    # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
-                    self.totalMap[self.boty_pixel][self.botx_pixel] = ROBOT
-
-                    # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
-                    self.totalMap[self.magicOriginy_pixel][self.magicOriginx_pixel] = MAGIC_ORIGIN
-
-                    # MAGIC_ORIGIN will override ROBOT and colour will be weird, if robot at magic origin
-
-                    cmap = ListedColormap(colourList)
-
-                    plt.imshow(self.totalMap, origin='lower', cmap=cmap)
-
-                    plt.draw_all()
-                    # pause to make sure the plot gets created
-                    plt.pause(0.00000000001)
-                elif PLOT_PROCESSED == True:
-                    self.totalMap = self.processedOcc.copy()
+                try:
+                    # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
+                    totalMap_rgb[self.leftDoor_pixel[1]][self.leftDoor_pixel[0]] = (50, 205, 50)
+                    totalMap_rgb[self.rightDoor_pixel[1]][self.rightDoor_pixel[0]] = (50, 205, 50)
+                    totalMap_rgb[self.finishLine_pixel[1]][self.finishLine_pixel[0]] = (50, 205, 50)
                     
-                    # Normalize the array to the range 0-255
-                    totalMap_normalized = ((self.totalMap - 0) * (255 - 0) / (100 - 0)).astype(np.uint8)
-
-                    # Convert the normalized array to integers
-                    totalMap_int = totalMap_normalized.astype(np.uint8)
-
-                    # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
-                    TARGET_SIZE_M = 5
+                    # plot the must visit points
+                    for x, y in self.mustVisitPointsChecked_pixel:
+                        totalMap_rgb[y][x] = (50, 205, 50)
+                except:
+                    self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
                     
-                    # must add 10 otherwise cant plot the far point
-                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0], self.mustVisitPointsChecked_pixel[-1][1], self.mustVisitPointsChecked_pixel[-1][0]) + 10
-
-                    # Calculate the necessary padding
-                    padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
-                    padding_width = max(0, TARGET_SIZE_p - self.totalMap.shape[1])
-
-                    # Define the number of pixels to add to the height and width
-                    padding_height = (0, padding_height)  # Replace with the number of pixels you want to add to the top and bottom
-                    padding_width = (0, padding_width)  # Replace with the number of pixels you want to add to the left and right
-
-                    # Pad the image
-                    totalMap_rgb = np.pad(totalMap_int, pad_width=(padding_height, padding_width), mode='constant', constant_values=0)
-
-                    # Convert the single-channel grayscale image to a three-channel RGB image
-                    totalMap_rgb = cv2.cvtColor(totalMap_rgb, cv2.COLOR_GRAY2BGR)
+                # Set the value for the path planning points
+                for i in range(len(self.dest_x)):
+                    totalMap_rgb[self.dest_y[i]][self.dest_x[i]] = (255, 165, 0)
                     
-                    try:
-                        # Set the value of the door esitmate and finish line, y and x are flipped becasue image coordinates are (row, column)
-                        totalMap_rgb[self.leftDoor_pixel[1]][self.leftDoor_pixel[0]] = (50, 205, 50)
-                        totalMap_rgb[self.rightDoor_pixel[1]][self.rightDoor_pixel[0]] = (50, 205, 50)
-                        totalMap_rgb[self.finishLine_pixel[1]][self.finishLine_pixel[0]] = (50, 205, 50)
-                        
-                        # plot the must visit points
-                        for x, y in self.mustVisitPointsChecked_pixel:
-                            totalMap_rgb[y][x] = (50, 205, 50)
-                    except:
-                        self.get_logger().info('[Debug Plotter]: door and finish line cannot plot')
-                        
-                    # Set the value for the path planning points
-                    for i in range(len(self.dest_x)):
-                        totalMap_rgb[self.dest_y[i]][self.dest_x[i]] = (255, 165, 0)
-                        
-                    # Set the value of the frontier and the frontier points
-                    for pixel in self.frontier:
-                        totalMap_rgb[pixel[0]][pixel[1]] = (0, 255, 255)
+                # Set the value of the frontier and the frontier points
+                for pixel in self.frontier:
+                    totalMap_rgb[pixel[0]][pixel[1]] = (0, 255, 255)
 
-                    for pixel in self.frontierPoints:
-                        totalMap_rgb[pixel[1]][pixel[0]] = (255, 0, 255)
-                        
-                    # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
-                    totalMap_rgb[self.boty_pixel][self.botx_pixel] = (255, 0, 0)
-
-                    # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
-                    totalMap_rgb[self.magicOriginy_pixel][self.magicOriginx_pixel] = (255, 255, 0)
-
-                    # Display the image using matplotlib.pyplot
-                    plt.imshow(cv2.cvtColor(totalMap_rgb, cv2.COLOR_BGR2RGB), origin='lower')
-                    plt.draw_all()
-                    plt.pause(0.00000000001)
+                for pixel in self.frontierPoints:
+                    totalMap_rgb[pixel[1]][pixel[0]] = (255, 0, 255)
                     
-                elif PLOT_ORI == True:
-                    # plt.imshow(self.occupancyMap, origin='lower')
+                # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
+                totalMap_rgb[self.boty_pixel][self.botx_pixel] = (255, 0, 0)
 
-                    # cmap = ListedColormap(['black', 'red', 'gray'])
-                    # plt.imshow(self.processedOcc, cmap='gray', origin='lower')
-                    plt.imshow(self.oriorimap, cmap='gray', origin='lower')
+                # set magic origin pixel to 7, y and x are flipped becasue image coordinates are (row, column)
+                totalMap_rgb[self.magicOriginy_pixel][self.magicOriginx_pixel] = (255, 255, 0)
 
-                    plt.draw_all()
-                    # pause to make sure the plot gets created
-                    plt.pause(0.00000000001)
+                # Display the image using matplotlib.pyplot
+                plt.imshow(cv2.cvtColor(totalMap_rgb, cv2.COLOR_BGR2RGB), origin='lower')
+                plt.draw_all()
+                plt.pause(0.00000000001)
+                
+            elif PLOT_ORI == True:
+                # plt.imshow(self.occupancyMap, origin='lower')
 
-                self.lastPlot = time.time()
-        except:
-            self.get_logger().info('[Debug Plotter]: Debug cannot plot')
+                # cmap = ListedColormap(['black', 'red', 'gray'])
+                # plt.imshow(self.processedOcc, cmap='gray', origin='lower')
+                plt.imshow(self.oriorimap, cmap='gray', origin='lower')
+
+                plt.draw_all()
+                # pause to make sure the plot gets created
+                plt.pause(0.00000000001)
+
+            self.lastPlot = time.time()
+        # except:
+        #     self.get_logger().info('[Debug Plotter]: Debug cannot plot')
 
     def move_straight_to(self, tx, ty):
         target_yaw = math.atan2(ty - self.boty_pixel, tx - self.botx_pixel) * (180 / math.pi)
