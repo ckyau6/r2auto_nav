@@ -8,8 +8,8 @@ import math
 import cmath
 
 # constants
-max_linear_speed = 0.1
-max_angle_speed = 0.5  # anglularVel is in __???
+max_linear_speed = 0.15
+max_angle_speed = 1  # anglularVel is in __???
 
 
 # return the rotation angle around z axis in radians (counterclockwise)

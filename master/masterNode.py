@@ -119,15 +119,15 @@ MUST_VISIT_POINTS_M = [(x, y) for x in np.linspace(start_x, end_x, no_x) for y i
 MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 100
 
 # speedssss
-LIN_MAX = 110
-LIN_WHEN_ROTATING = 50
+LIN_MAX = 120
+LIN_WHEN_CLOSE = 70
+LIN_WHEN_ROTATING = 25
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
     t3 = +2.0 * (w * z + x * y)
     t4 = +1.0 - 2.0 * (y * y + z * z)
     return math.degrees(math.atan2(t3, t4))
-
 
 class MasterNode(Node):
     def __init__(self, show_plot):
@@ -288,7 +288,7 @@ class MasterNode(Node):
         # if None then nothing to jump to
         self.magicState = "idle"
 
-        fsm_period = 0.1  # seconds
+        fsm_period = 0.01  # seconds
         self.fsmTimer = self.create_timer(fsm_period, self.masterFSM)
 
         self.closestAngle = 0
@@ -306,7 +306,7 @@ class MasterNode(Node):
         # constants
         # self.linear_speed = 100
         # self.yaw_offset = 0
-        self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
+        self.recalc_freq = 50  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
 
         self.path_recalc_freq = 20
@@ -802,7 +802,7 @@ class MasterNode(Node):
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
                 # move backward for 0.5 sec as long as butt has space
-                self.linear_msg.data = -LIN_MAX
+                self.linear_msg.data = -50
                 self.linear_publisher.publish(self.linear_msg)
                 start = time.time()
                 while (time.time() - start < 0.3) \
@@ -886,6 +886,18 @@ class MasterNode(Node):
             return
         else:
             self.get_logger().info('[masterFSM]: new occ map received can run')
+            
+        # if running and close to somthing slow down else go back up
+        if self.linear_msg.data != 0:
+        # check distance and change speed
+        
+            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+                        or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+                        or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+                        or np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
+                self.linear_msg.data = LIN_WHEN_CLOSE
+            else:
+                self.linear_msg.data = LIN_MAX
                 
         if self.state == "idle":
             # reset servo to 90, to block ballsssss
@@ -1780,7 +1792,7 @@ class MasterNode(Node):
             else:
                 # if after 30s still not hit, change back to checking_walls_distance
                 if time.time() - self.bucketStarted < 30:
-                    self.linear_msg.data = 75
+                    self.linear_msg.data = 37
                     self.linear_publisher.publish(self.linear_msg)
 
                     # if the bucket is in the to the right, turn left slightly
@@ -1793,10 +1805,10 @@ class MasterNode(Node):
                         self.get_logger().info('[moving_to_bucket]: too close, just moving forward')
                     else:
                         if self.bucketAngle > 5 and self.bucketAngle < 180:
-                            anglularVel_msg.data = 100
+                            anglularVel_msg.data = 50
                             self.get_logger().info('[moving_to_bucket]: moving forward and left')
                         elif self.bucketAngle < 355 and self.bucketAngle > 180:
-                            anglularVel_msg.data = -100
+                            anglularVel_msg.data = -50
                             self.get_logger().info('[moving_to_bucket]: moving forward and right')
                         else:
                             anglularVel_msg.data = 0
