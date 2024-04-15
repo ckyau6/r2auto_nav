@@ -2,7 +2,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import UInt8, UInt16, Float64, String, Int8
+from std_msgs.msg import UInt8, UInt16, Float64, String, Int8, Int32
 from geometry_msgs.msg import Twist, Pose
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
@@ -254,18 +254,10 @@ class MasterNode(Node):
             10)
         self.pos_y = self.pos_x = self.yaw = 0
 
-        ''' ================================================ cmd_linear ================================================ '''
-        # Create a publisher to the topic "cmd_linear", which can stop and move forward the robot
-        self.linear_publisher = self.create_publisher(Int8, 'cmd_linear', 10)
-
-        ''' ================================================ cmd_anglularVel ================================================ '''
-        # Create a publisher to the topic "cmd_angle", which can rotate the robot
-        self.anglularVel_publisher = self.create_publisher(Int8, 'cmd_anglularVel', 10)
-
-        ''' ================================================ cmd_deltaAngle ================================================ '''
-        # Create a publisher to the topic "cmd_angle", which can rotate the robot
-        self.deltaAngle_publisher = self.create_publisher(Float64, 'cmd_deltaAngle', 10)
-
+        ''' ================================================ vel to robocontrolnode ================================================ '''
+        # Create a publisher to the topic "vel"
+        self.vel_publisher = self.create_publisher(Int32, 'vel', 10)
+        
         ''' ================================================ robotControlNode_state_feedback ================================================ '''
         # Create a subscriber to the robotControlNode_state_feedback
         self.robotControl_subscription = self.create_subscription(
@@ -276,10 +268,6 @@ class MasterNode(Node):
         
         # make this global so can be used to check moving or not
         self.linear_msg = Int8()
-
-        ''' ================================================ boolCurve ================================================ '''
-        # Create a publisher to the topic "boolCurve", which can changing bool for curve the robot
-        self.boolCurve_publisher = self.create_publisher(Int8, 'boolCurve', 10)
 
         ''' ================================================ Master FSM ================================================ '''
         self.state = "idle"
@@ -687,11 +675,6 @@ class MasterNode(Node):
             self.state = self.magicState = msg.data
             
             if msg.data == "checking_walls_distance":
-                # only used for injecting 
-                # set boolCurve to 1, to be place in the state before checking_walls_distance
-                boolCurve_msg = Int8()
-                boolCurve_msg.data = 1
-                self.boolCurve_publisher.publish(boolCurve_msg)
                 
                 self.disableOCC = True
                 
@@ -939,11 +922,6 @@ class MasterNode(Node):
             switch_msg = String()
             switch_msg.data = "deactivate"
             self.switch_publisher.publish(switch_msg)
-
-            # set boolCurve to 1
-            boolCurve_msg = Int8()
-            boolCurve_msg.data = 1
-            self.boolCurve_publisher.publish(boolCurve_msg)
             
             # reset to not disable OCC callback and newOccFlag
             self.disableOCC = False
@@ -1453,11 +1431,6 @@ class MasterNode(Node):
                 # set magicState to start bucket task after moving in to room
                 self.state = self.magicState = "checking_walls_distance"
                 
-                # set boolCurve to 1, to be place in the state before checking_walls_distance
-                boolCurve_msg = Int8()
-                boolCurve_msg.data = 1
-                self.boolCurve_publisher.publish(boolCurve_msg)
-                
                 # disable OCC callbacks since after entering it will not be used
                 self.disableOCC = True
                 
@@ -1491,11 +1464,6 @@ class MasterNode(Node):
                 
                 # set magicState to start bucket task after moving in to room
                 self.state = self.magicState = "checking_walls_distance"
-                
-                # set boolCurve to 1, to be place in the state before checking_walls_distance
-                boolCurve_msg = Int8()
-                boolCurve_msg.data = 1
-                self.boolCurve_publisher.publish(boolCurve_msg)
                 
                 # disable OCC callbacks since after entering it will not be used
                 self.disableOCC = True
@@ -2431,6 +2399,21 @@ class MasterNode(Node):
             
         self.get_logger().info('[frontierSearch]: frontier points: %s' % str(self.frontierPoints))
 
+    def pubVels(self, linVel, angVel, delAng):
+        # Convert the velocities to 8-bit signed integers
+        linVel = max(min(int(linVel), 127), -128)
+        angVel = max(min(int(angVel), 127), -128)
+
+        # Convert the angle to a 16-bit signed integer
+        delAng = max(min(int(delAng), 32767), -32768)
+
+        # Pack the values into a 32-bit integer
+        packed = linVel << 24 | angVel << 16 | delAng & 0xFFFF
+
+        # Create a message and publish it
+        msg = Int32()
+        msg.data = packed
+        self.vel_publisher.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)
