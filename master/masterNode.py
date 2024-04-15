@@ -1940,8 +1940,19 @@ class MasterNode(Node):
                     # add padding until certain size, add in the estimated door and finish line incase they exceed for whatever reason
                     TARGET_SIZE_M = 5
                     
+                    # find the max x and y in must visit
+                    # need to check that its not empty
+                    if len(self.mustVisitPointsChecked_pixel) > 0:
+                        # Find the maximum x and y values
+                        maxMustVisitPointsChecked_pixel_x = max(self.mustVisitPointsChecked_pixel, key=lambda point: point[0])[0]
+                        maxMustVisitPointsChecked_pixel_y = max(self.mustVisitPointsChecked_pixel, key=lambda point: point[1])[1]
+                    else:
+                        # set to 0
+                        maxMustVisitPointsChecked_pixel_x = 0
+                        maxMustVisitPointsChecked_pixel_y = 0
+
                     # must add 10 otherwise cant plot the far point
-                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0], self.mustVisitPointsChecked_pixel[-1][1], self.mustVisitPointsChecked_pixel[-1][0]) + 10
+                    TARGET_SIZE_p = max(round(TARGET_SIZE_M / self.map_res), self.leftDoor_pixel[1], self.leftDoor_pixel[0], self.rightDoor_pixel[1], self.rightDoor_pixel[0], self.finishLine_pixel[1], self.finishLine_pixel[0], maxMustVisitPointsChecked_pixel_x, maxMustVisitPointsChecked_pixel_y) + 10
 
                     # Calculate the necessary padding
                     padding_height = max(0, TARGET_SIZE_p - self.totalMap.shape[0])
