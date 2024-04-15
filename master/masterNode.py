@@ -88,7 +88,7 @@ FRONTIER_SKIP_THRESHOLD = 1e9
 FRONTIER_DIST_M = 0.10
 
 # radius around bot to be visited, in meter
-VISIT_RADIUS_M = 0.4
+VISIT_RADIUS_M = 0.5
 
 # time in s to wait after no more frontier before goin to hall way
 WAIT_FRONTIER = 10
@@ -119,9 +119,9 @@ MUST_VISIT_POINTS_M = [(x, y) for x in np.linspace(start_x, end_x, no_x) for y i
 MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 100
 
 # speedssss
-LIN_MAX = 120
-LIN_WHEN_CLOSE = 50
-LIN_WHEN_ROTATING = 25
+LIN_MAX = 90
+LIN_WHEN_CLOSE = 60
+LIN_WHEN_ROTATING = 20
 
 # return the rotation angle around z axis in degrees (counterclockwise)
 def angle_from_quaternion(x, y, z, w):
@@ -268,7 +268,7 @@ class MasterNode(Node):
 
         ''' ================================================ robotControlNode_state_feedback ================================================ '''
         # Create a subscriber to the robotControlNode_state_feedback
-        self.pos_subscription = self.create_subscription(
+        self.robotControl_subscription = self.create_subscription(
             String,
             'robotControlNode_state_feedback',
             self.robotControlNode_state_feedback_callback,
@@ -295,7 +295,7 @@ class MasterNode(Node):
 
         # Create a subscriber to the topic fsmDebug
         # to inject state changes for debugging in RQT
-        self.pos_subscription = self.create_subscription(
+        self.fsmDebug_subscription = self.create_subscription(
             String,
             'fsmDebug',
             self.fsmDebug_callback,
@@ -461,6 +461,16 @@ class MasterNode(Node):
         
         if self.disableOCC == False:
             self.get_logger().info('[occ_callback]: occ enabled')
+            
+            # ensure its stopped
+            # set linear to be zero
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
+
+            # set delta angle = 0 to stop
+            deltaAngle_msg = Float64()
+            deltaAngle_msg.data = 0.0
+            self.deltaAngle_publisher.publish(deltaAngle_msg)
             
             # disable occCallback
             self.disableOCC = True
@@ -760,6 +770,15 @@ class MasterNode(Node):
             self.state = self.magicState = "wait_for_frontier"
             self.lastWaitForFrontier = time.time()
             
+            # set linear to be zero
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
+
+            # set delta angle = 0 to stop
+            deltaAngle_msg = Float64()
+            deltaAngle_msg.data = 0.0
+            self.deltaAngle_publisher.publish(deltaAngle_msg)
+            
             # enable occCallback
             self.disableOCC = False
             
@@ -953,6 +972,24 @@ class MasterNode(Node):
         elif self.state == "maze_moving":                
             # if reached the destination (within one pixel), stop and move to the next destination
             self.get_logger().info('[maze_moving]: moving')
+            
+            # due to being fast may over shoot, so cut to the closest point in the path when over shoot
+            curr_pos = np.array([self.botx_pixel, self.boty_pixel])
+            x_coords = np.array(self.dest_x)
+            y_coords = np.array(self.dest_y)
+            
+            # Combine the x and y coordinates into a list of points
+            points = np.vstack((x_coords, y_coords)).T
+
+            # Calculate the Euclidean distance between the point and each point in the list
+            distances = np.linalg.norm(points - curr_pos, axis=1)
+
+            # Find the index of the point with the smallest distance
+            indexCut = np.argmin(distances)
+            
+            # jump to the closest point
+            self.dest_x = self.dest_x[indexCut:]
+            self.dest_y = self.dest_y[indexCut:]
 
             if abs(self.botx_pixel - self.dest_x[0]) <= PIXEL_DEST_THRES and abs(
                     self.boty_pixel - self.dest_y[0]) <= PIXEL_DEST_THRES:
@@ -1160,6 +1197,15 @@ class MasterNode(Node):
             # after WAIT_FRONTIER sec, go to move_to_hallway
             
             self.get_logger().info('[wait_for_frontier]: waitng until %f, now is %f' % (WAIT_FRONTIER, time.time() - self.lastWaitForFrontier))
+            
+            # set linear to be zero
+            self.linear_msg.data = 0
+            self.linear_publisher.publish(self.linear_msg)
+
+            # set delta angle = 0 to stop
+            deltaAngle_msg = Float64()
+            deltaAngle_msg.data = 0.0
+            self.deltaAngle_publisher.publish(deltaAngle_msg)
             
             # enable occCallback
             self.disableOCC = False
@@ -2309,78 +2355,78 @@ class MasterNode(Node):
                         else:
                             self.frontierPoints.append(point)
                 
-            # # Current position
-            # curr_pos = np.array([self.botx_pixel, self.boty_pixel])
-            
-            # # if the cost is low, means not across wall 
-            
-            # # if froniter is a certain radius from the robot 
-            # #   filter away those will high cost (if next to robot and still high cost means crossing wall)
-            # #   then sort by distance from current position, 
-            # #   this will explore the points around the robot
-            # # else sort by lower y value first (explore place further from hallway first)
-            
-            # if all(np.linalg.norm(curr_pos - np.array(point)) < VISIT_RADIUS_M / self.map_res for point in self.frontierPoints):
-            #     # filter away those will high cost
-            #     self.frontierPoints = [point for point in self.frontierPoints if self.dist[point[1]][point[0]] < VISIT_COST]
-                
-            #     # sort by distance away from current position
-            #     self.get_logger().info('[frontierSearch]: sort by distance away from curr')
-                
-            #     def cmp_points(a, b):
-            #         d_to_a = np.linalg.norm(curr_pos - np.array(a))
-            #         d_to_b = np.linalg.norm(curr_pos - np.array(b))
-            #         if d_to_a == d_to_b:
-            #             return 0
-            #         return -1 if d_to_a < d_to_b else 1
-
-            #     self.frontierPoints.sort(key=cmp_to_key(cmp_points))
-                
-            #     if len(self.frontierPoints) >= 2:
-            #         # if the first two points distance are closer than FRONTIER_DIST_M, sort by lower y value first
-            #         d0 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[0]))
-            #         d1 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[1]))
-                    
-            #         if abs(d0 - d1) < FRONTIER_DIST_M / self.map_res:
-            #             # comapre y values
-            #             if self.frontierPoints[0][1] > self.frontierPoints[1][1]:
-            #                 self.frontierPoints[0], self.frontierPoints[1] = self.frontierPoints[1], self.frontierPoints[0]
-                            
-            #         # to hope to prevent oscillatory behavior
-            #         self.get_logger().info('[frontierSearch]: distance closest two points')
-                             
-            # else:
-            #     # sort by y
-            #     self.get_logger().info('[frontierSearch]: sort by y')
-                
-            #     self.frontierPoints = sorted(self.frontierPoints, key=lambda point: point[1])
-                
-                
-            # sort points by distance from current position
             # Current position
             curr_pos = np.array([self.botx_pixel, self.boty_pixel])
-
-            def cmp_points(a, b):
-                d_to_a = np.linalg.norm(curr_pos - np.array(a))
-                d_to_b = np.linalg.norm(curr_pos - np.array(b))
-                if d_to_a == d_to_b:
-                    return 0
-                return -1 if d_to_a < d_to_b else 1
-
-            self.frontierPoints.sort(key=cmp_to_key(cmp_points))
             
-            if len(self.frontierPoints) >= 2:
-                # if the first two points distance are closer than FRONTIER_DIST_M, sort by lower y value first
-                d0 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[0]))
-                d1 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[1]))
+            # if the cost is low, means not across wall 
+            
+            # if froniter is a certain radius from the robot 
+            #   filter away those will high cost (if next to robot and still high cost means crossing wall)
+            #   then sort by distance from current position, 
+            #   this will explore the points around the robot
+            # else sort by lower y value first (explore place further from hallway first)
+            
+            if any(np.linalg.norm(curr_pos - np.array(point)) < VISIT_RADIUS_M / self.map_res for point in self.frontierPoints):
+                # # filter away those will high cost
+                # self.frontierPoints = [point for point in self.frontierPoints if self.dist[point[1]][point[0]] < VISIT_COST]
                 
-                if abs(d0 - d1) < FRONTIER_DIST_M / self.map_res:
-                    # comapre y values
-                    if self.frontierPoints[0][1] > self.frontierPoints[1][1]:
-                        self.frontierPoints[0], self.frontierPoints[1] = self.frontierPoints[1], self.frontierPoints[0]
+                # sort by distance away from current position
+                self.get_logger().info('[frontierSearch]: sort by distance away from curr')
+                
+                def cmp_points(a, b):
+                    d_to_a = np.linalg.norm(curr_pos - np.array(a))
+                    d_to_b = np.linalg.norm(curr_pos - np.array(b))
+                    if d_to_a == d_to_b:
+                        return 0
+                    return -1 if d_to_a < d_to_b else 1
+
+                self.frontierPoints.sort(key=cmp_to_key(cmp_points))
+                
+                if len(self.frontierPoints) >= 2:
+                    # if the first two points distance are closer than FRONTIER_DIST_M, sort by lower y value first
+                    d0 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[0]))
+                    d1 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[1]))
+                    
+                    if abs(d0 - d1) < FRONTIER_DIST_M / self.map_res:
+                        # comapre y values
+                        if self.frontierPoints[0][1] > self.frontierPoints[1][1]:
+                            self.frontierPoints[0], self.frontierPoints[1] = self.frontierPoints[1], self.frontierPoints[0]
+                            
+                    # to hope to prevent oscillatory behavior
+                    self.get_logger().info('[frontierSearch]: distance closest two points')
+                             
+            else:
+                # sort by y
+                self.get_logger().info('[frontierSearch]: sort by y')
+                
+                self.frontierPoints = sorted(self.frontierPoints, key=lambda point: point[1])
+                
+                
+            # # sort points by distance from current position
+            # # Current position
+            # curr_pos = np.array([self.botx_pixel, self.boty_pixel])
+
+            # def cmp_points(a, b):
+            #     d_to_a = np.linalg.norm(curr_pos - np.array(a))
+            #     d_to_b = np.linalg.norm(curr_pos - np.array(b))
+            #     if d_to_a == d_to_b:
+            #         return 0
+            #     return -1 if d_to_a < d_to_b else 1
+
+            # self.frontierPoints.sort(key=cmp_to_key(cmp_points))
+            
+            # if len(self.frontierPoints) >= 2:
+            #     # if the first two points distance are closer than FRONTIER_DIST_M, sort by lower y value first
+            #     d0 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[0]))
+            #     d1 = np.linalg.norm(curr_pos - np.array(self.frontierPoints[1]))
+                
+            #     if abs(d0 - d1) < FRONTIER_DIST_M / self.map_res:
+            #         # comapre y values
+            #         if self.frontierPoints[0][1] > self.frontierPoints[1][1]:
+            #             self.frontierPoints[0], self.frontierPoints[1] = self.frontierPoints[1], self.frontierPoints[0]
                         
-                # to hope to prevent oscillatory behavior
-                self.get_logger().info('[frontierSearch]: distance closest two points')
+            #     # to hope to prevent oscillatory behavior
+            #     self.get_logger().info('[frontierSearch]: distance closest two points')
                 
             
         self.get_logger().info('[frontierSearch]: frontier points: %s' % str(self.frontierPoints))
