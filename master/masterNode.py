@@ -2390,11 +2390,38 @@ class MasterNode(Node):
                     self.get_logger().info('[frontierSearch]: distance closest two points')
                              
             else:
-                SORT_BY_X = False
-                SORT_BY_nX = False
-                SORT_BY_Y = True
-                SORT_BY_FROM_LEFT_BOT = False
-                SORT_BY_FROM_RIGHT_BOT = False
+                '''
+                _________________________________________________
+                |                                               |
+                |   TOP LEFT        TOP MID          TOP RIGHT  |
+                |                                               |
+                |                                               |
+                |                                               |
+                |                                               |
+                |                    MAZE                       |
+                |                                               |
+                |                                               |
+                |                                               |
+                |______________                                 |
+                |  Ori                                          |
+                |_______________________________________________|
+                
+                
+                if exit at TOP LEFT:    LAST_AT_TOP_LEFT        acending sort by distance from TOP LEFT
+                if exit at TOP MID:     LAST_AT_TOP_MID         acending sort by distance from TOP MID
+                if exit at TOP RIGHT:   LAST_AT_TOP_RIGHT       acending sort by distance from TOP RIGHT
+                
+                '''
+                
+                LAST_AT_TOP_LEFT = False
+                LAST_AT_TOP_MID = False
+                LAST_AT_TOP_RIGHT = False
+                
+                if LAST_AT_TOP_RIGHT:
+                    
+                elif LAST_AT_TOP_LEFT
+                
+                
                 
                 if SORT_BY_X:
                     # sort by y
