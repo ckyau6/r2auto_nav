@@ -2042,11 +2042,13 @@ class MasterNode(Node):
                         totalMap_rgb[self.dest_y[i]][self.dest_x[i]] = (255, 165, 0)
                         
                     # Set the value of the frontier and the frontier points
-                    for pixel in self.frontier:
-                        totalMap_rgb[pixel[0]][pixel[1]] = (0, 255, 255)
-
-                    for pixel in self.frontierPoints:
-                        totalMap_rgb[pixel[1]][pixel[0]] = (255, 0, 255)
+                    if len(self.frontier) > 0:
+                        for pixel in self.frontier:
+                            totalMap_rgb[pixel[0]][pixel[1]] = (0, 255, 255)
+                            
+                    if len(self.frontierPoints) > 0:
+                        for pixel in self.frontierPoints:
+                            totalMap_rgb[pixel[1]][pixel[0]] = (255, 0, 255)
                         
                     # set bot pixel to 0, y and x are flipped becasue image coordinates are (row, column)
                     totalMap_rgb[self.boty_pixel][self.botx_pixel] = (255, 0, 0)
@@ -2406,48 +2408,31 @@ class MasterNode(Node):
                 |  Ori                                          |
                 |_______________________________________________|
                 
-                
-                if exit at TOP LEFT:    LAST_AT_TOP_LEFT        acending sort by distance from TOP LEFT
+                if exit at TOP RIGHT:   LAST_AT_TOP_RIGHT       decending sort by distance from TOP RIGHT
                 if exit at TOP MID:     LAST_AT_TOP_MID         acending sort by distance from TOP MID
-                if exit at TOP RIGHT:   LAST_AT_TOP_RIGHT       acending sort by distance from TOP RIGHT
+                if exit at TOP LEFT:    LAST_AT_TOP_LEFT        decending sort by distance from TOP LEFT
                 
                 '''
                 
                 LAST_AT_TOP_LEFT = False
-                LAST_AT_TOP_MID = False
+                LAST_AT_TOP_MID = True
                 LAST_AT_TOP_RIGHT = False
                 
                 if LAST_AT_TOP_RIGHT:
-                    
-                elif LAST_AT_TOP_LEFT
-                
-                
-                
-                if SORT_BY_X:
-                    # sort by y
-                    self.get_logger().info('[frontierSearch]: sort by x')
-                    
-                    self.frontierPoints = sorted(self.frontierPoints, key=lambda point: point[0])
-                elif SORT_BY_nX:
-                    # sort by y
-                    self.get_logger().info('[frontierSearch]: sort by nx')
-                    
-                    self.frontierPoints = sorted(self.frontierPoints, key=lambda point: point[0])
-                    
-                    self.frontierPoints.reverse()
-                elif SORT_BY_Y:
-                    # sort by y
-                    self.get_logger().info('[frontierSearch]: sort by y')
-                    
-                    self.frontierPoints = sorted(self.frontierPoints, key=lambda point: point[1])
-                elif SORT_BY_FROM_LEFT_BOT:
-                    self.get_logger().info('[frontierSearch]: sort by SORT_BY_FROM_LEFT_BOT')
+                    self.get_logger().info('[frontierSearch]: LAST_AT_TOP_RIGHT')
                     
                     self.frontierPoints = sorted(self.frontierPoints, key=lambda point: point[1]**2 + point[0]**2)
-                elif SORT_BY_FROM_RIGHT_BOT:
-                    self.get_logger().info('[frontierSearch]: sort by SORT_BY_FROM_RIGHT_BOT')
                     
-                    self.frontierPoints = sorted(self.frontierPoints, key=lambda point: (self.map_w - point[0])**2 + point[1]**2)
+                elif LAST_AT_TOP_LEFT:
+                    self.get_logger().info('[frontierSearch]: LAST_AT_TOP_LEFT')
+                    
+                    self.frontierPoints = sorted(self.frontierPoints, key=lambda point: (point[0] - 3.5 / self.map_res)**2 + point[1]**2)
+                    
+                elif LAST_AT_TOP_MID:
+                    self.get_logger().info('[frontierSearch]: LAST_AT_TOP_MID')
+                    
+                    self.frontierPoints = list(reversed(sorted(self.frontierPoints, key=lambda point: (point[0] - (3.5 / 2) / self.map_res)**2 + (point[1] - 2.1 / self.map_res)**2)))
+                    
                 
             # # sort points by distance from current position
             # # Current position
