@@ -114,7 +114,9 @@ start_x, end_x, no_x = 0, 3.1, 10
 start_y, end_y, no_y = 0, 1.7, 10
 
 # Create the grid, must be last item bigges x and y
-MUST_VISIT_POINTS_M = [(x, y) for x in np.linspace(start_x, end_x, no_x) for y in np.linspace(start_y, end_y, no_y)]
+# MUST_VISIT_POINTS_M = [(x, y) for x in np.linspace(start_x, end_x, no_x) for y in np.linspace(start_y, end_y, no_y)]
+
+MUST_VISIT_POINTS_M = [(3.15, 0.75), (2.6, 0.75), (3, 0.75*2), (2, 0.75*2)]
 
 MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 10000
 
@@ -458,6 +460,14 @@ class MasterNode(Node):
         
         # MUST_VISIT_POINTS_M
         self.mustVisitPoints_pixel = [(round((x - self.map_origin_x) / self.map_res) + self.offset_x, round((y - self.map_origin_y) / self.map_res) + self.offset_y) for x, y in self.mustVisitPoints_m]
+        
+        # only apply shift to destination if OCC is disable
+        # this means dest is still correct, just that map is not
+        # if OCC is enable, then dest is corrected with shift below when new path is calculated
+        if self.disableOCC == True:
+            # add the offset to the all destination
+            self.dest_x = [x + self.offset_x for x in self.dest_x]
+            self.dest_y = [y + self.offset_y for y in self.dest_y]
         
         if self.disableOCC == False:
             self.get_logger().info('[occ_callback]: occ enabled')
