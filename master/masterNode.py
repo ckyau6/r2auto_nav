@@ -29,7 +29,7 @@ import cv2
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
 
-occ_bins = [-1, 0, 50, 100]
+occ_bins = [-1, 0, 55, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
