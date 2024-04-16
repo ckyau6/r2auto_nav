@@ -33,7 +33,7 @@ occ_bins = [-1, 0, 50, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 5
+CLEARANCE_RADIUS = 0
 
 # this is in pixel
 # FRONTIER_THRESHOLD = 4
@@ -75,14 +75,14 @@ OBSTACLE = 3
 # RADIUS_OF_IGNORE = 3
 RADIUS_OF_IGNORE = 1
 
-PARAMETER_R = 0.93
+PARAMETER_R = 0.9
 # use odd number for window size
 # WINDOWSIZE = 21
 # WINDOWSIZE = 9
 WINDOWSIZE = 25
 
 # if distance is more than this value, skip that point
-FRONTIER_SKIP_THRESHOLD = 1e9
+FRONTIER_SKIP_THRESHOLD = 3e9
 
 # distance to two points to be considered sorted by lower y, in meter
 FRONTIER_DIST_M = 0.10
@@ -805,8 +805,7 @@ class MasterNode(Node):
                 
         # special case for maze_rotating
         # if moving then need to check for obstacle, else rotate on spot no need to check
-        if (self.state not in listStateIgnoreForObstacle) or (self.state == "maze_rotating" and self.linear_msg.data != 0):
-            
+        if (self.state not in listStateIgnoreForObstacle) or (self.state == "maze_rotating" and self.linear_msg.data != 0):      
             # if obstacle in front and close to both sides, rotate to move between the two
             if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
                     or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
@@ -823,11 +822,14 @@ class MasterNode(Node):
                 deltaAngle_msg.data = 0.0
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
+                time.sleep(0.5)
+                
                 # move backward for 0.5 sec as long as butt has space
                 self.linear_msg.data = -LIN_MAX
+                # self.linear_msg.data = int(-LIN_MAX / 1.5)
                 self.linear_publisher.publish(self.linear_msg)
                 start = time.time()
-                while (time.time() - start < 0.4) \
+                while (time.time() - start < 0.8) \
                     and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
                     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
                     pass
@@ -837,42 +839,42 @@ class MasterNode(Node):
                 
                 anglularVel_msg = Int8()
                 
-                # rotate to next point if have next point else just rotate to away from the close one
-                if len(self.dest_y) > 1:
-                    target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
-                            180 / math.pi)
+                # # rotate to next point if have next point else just rotate to away from the close one
+                # if len(self.dest_y) > 1:
+                #     target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
+                #             180 / math.pi)
 
-                    deltaAngle = target_yaw - self.yaw
+                #     deltaAngle = target_yaw - self.yaw
 
-                    self.get_logger().info('[masterFSM]: align to next dest: %f' % deltaAngle)
+                #     self.get_logger().info('[masterFSM]: align to next dest: %f' % deltaAngle)
 
-                    self.linear_msg.data = 0
-                    self.linear_publisher.publish(self.linear_msg)
+                #     self.linear_msg.data = 0
+                #     self.linear_publisher.publish(self.linear_msg)
 
-                    # set delta angle to rotate to target angle
-                    deltaAngle_msg = Float64()
-                    deltaAngle_msg.data = deltaAngle * 1.0
-                    self.deltaAngle_publisher.publish(deltaAngle_msg)
+                #     # set delta angle to rotate to target angle
+                #     deltaAngle_msg = Float64()
+                #     deltaAngle_msg.data = deltaAngle * 1.0
+                #     self.deltaAngle_publisher.publish(deltaAngle_msg)
 
-                    self.state = "maze_rotating"
+                #     self.state = "maze_rotating"
                 
+                # else:
+                self.get_logger().info('[masterFSM]: rotate away from close one')
+                
+                # rotate to away from the close one for 0.5 sec
+                if np.nanmean(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmean(self.laser_range[self.mazeFrontRightindex:]):
+                    anglularVel_msg.data = -120
                 else:
-                    self.get_logger().info('[masterFSM]: rotate away from close one')
+                    anglularVel_msg.data = 120
                     
-                    # rotate to away from the close one for 0.5 sec
-                    if np.nanmean(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmean(self.laser_range[self.mazeFrontRightindex:]):
-                        anglularVel_msg.data = -120
-                    else:
-                        anglularVel_msg.data = 120
-                        
-                    self.anglularVel_publisher.publish(anglularVel_msg)
-                    
-                    start = time.time()
-                    while (time.time() - start < 0.75):
-                        pass
+                self.anglularVel_publisher.publish(anglularVel_msg)
                 
-                    anglularVel_msg.data = 0
-                    self.anglularVel_publisher.publish(anglularVel_msg)
+                start = time.time()
+                while (time.time() - start < 0.75):
+                    pass
+            
+                anglularVel_msg.data = 0
+                self.anglularVel_publisher.publish(anglularVel_msg)
                 
                 # get rid of point that is too close to wall in the first place and take the next one
                 # cannot take final one if its like thru a wall
