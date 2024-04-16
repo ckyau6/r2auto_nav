@@ -8,7 +8,7 @@ import math
 import cmath
 
 # constants
-max_linear_speed = 0.12
+max_linear_speed = 0.10
 
 max_angle_speed = 0.5  # anglularVel is in __???
 

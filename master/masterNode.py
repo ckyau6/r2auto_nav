@@ -33,7 +33,7 @@ occ_bins = [-1, 0, 50, 100]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
-CLEARANCE_RADIUS = 5
+CLEARANCE_RADIUS = 0
 
 # this is in pixel
 # FRONTIER_THRESHOLD = 4
@@ -60,7 +60,7 @@ BACK_ANGLE_RANGE = 5
 BACK_LOWER_ANGLE = 180 - BACK_ANGLE_RANGE
 BACK_UPPER_ANGLE = 180 + BACK_ANGLE_RANGE
 
-MAZE_FRONT_RANGE = 26
+MAZE_FRONT_RANGE = 28
 MAZE_FRONT_LEFT_ANGLE = 0 + MAZE_FRONT_RANGE
 MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 
@@ -355,6 +355,9 @@ class MasterNode(Node):
         self.mustVisitPointsChecked_pixel = []
         
         self.frontierSkipThreshold = FRONTIER_SKIP_THRESHOLD
+        
+        self.firstTimeNoFrontier = True
+        self.noFrontierTimeBeforeMustVisit = 0
 
     def http_listener_callback(self, msg):
         # "idle", "door1", "door2", "connection error", "http error"
@@ -744,27 +747,40 @@ class MasterNode(Node):
 
         # if no more frontier and its in frontier search means done and go to visiting_must_visit
         if self.magicState == "frontier_search" and self.frontierPoints == []:
-            self.get_logger().info('[masterFSM]: no more frontier points go to visiting_must_visit')
-            self.state = self.magicState = "visiting_must_visit"
             
-            # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
-            # set linear to be zero
-            self.linear_msg.data = 0
-            self.linear_publisher.publish(self.linear_msg)
+            if self.firstTimeNoFrontier == True:
+                self.noFrontierTimeBeforeMustVisit = time.time()
+                self.firstTimeNoFrontier = False
+                self.get_logger().info('[masterFSM]: first time no frontier, start timer')
+                
+                # enable occCallback
+                self.disableOCC = False
+                
+                # set newOccFlag to False
+                self.newOccFlag = False
+            
+            elif (time.time() - self.noFrontierTimeBeforeMustVisit) > 10:
+                self.get_logger().info('[masterFSM]: countdown finished, no more frontier points go to visiting_must_visit')
+                self.state = self.magicState = "visiting_must_visit"
+                
+                # set to stop since it sometimes hit to wall during state transistion, as there is not obstacle avoidance outside of moving
+                # set linear to be zero
+                self.linear_msg.data = 0
+                self.linear_publisher.publish(self.linear_msg)
 
-            # set delta angle = 0 to stop
-            deltaAngle_msg = Float64()
-            deltaAngle_msg.data = 0.0
-            self.deltaAngle_publisher.publish(deltaAngle_msg)
-            
-            # call for new map again before going visiting_must_visit so the must visit points are updated
-            # enable occCallback
-            self.disableOCC = False
-            
-            # set newOccFlag to False
-            self.newOccFlag = False
-            
-            self.visiting_must_visit_start = time.time()
+                # set delta angle = 0 to stop
+                deltaAngle_msg = Float64()
+                deltaAngle_msg.data = 0.0
+                self.deltaAngle_publisher.publish(deltaAngle_msg)
+                
+                # call for new map again before going visiting_must_visit so the must visit points are updated
+                # enable occCallback
+                self.disableOCC = False
+                
+                # set newOccFlag to False
+                self.newOccFlag = False
+                
+                self.visiting_must_visit_start = time.time()
             
         # if no more must visit points and its in visiting_must_visit means really done so go to wait_for_frontier
         if self.magicState == "visiting_must_visit" and self.frontierPoints == [] and (time.time() - self.visiting_must_visit_start) > 15:
@@ -824,10 +840,10 @@ class MasterNode(Node):
                 self.deltaAngle_publisher.publish(deltaAngle_msg)
                 
                 # move backward for 0.5 sec as long as butt has space
-                self.linear_msg.data = -LIN_MAX
+                self.linear_msg.data = -LIN_MAX / 2
                 self.linear_publisher.publish(self.linear_msg)
                 start = time.time()
-                while (time.time() - start < 0.4) \
+                while (time.time() - start < 1.2) \
                     and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
                     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
                     pass
@@ -1546,8 +1562,8 @@ class MasterNode(Node):
                 # if front and butt not clear, rotate to left or right with the most space, then pass back to rotating_to_move_away_from_walls
                 # if front is not clear, stop and pass to checking_walls_distance to rotate away from closest object
                 # if butt is not clear, keep going forwad until clear then pass to checking_walls_distance to check again
-                frontNotClear = any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)
-                buttNotClear = any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10)
+                frontNotClear = any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE) or np.all(np.isnan(self.laser_range[self.bucketFrontRightIndex:])) or np.all(np.isnan(self.laser_range[0:self.bucketFrontLeftIndex]))
+                buttNotClear = any(self.laser_range[self.backIndexL:self.backIndexH] < BUCKET_TOO_CLOSE + 0.10) or np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH]))
                 
                 if frontNotClear and buttNotClear:
                     self.get_logger().info('[rotating_to_move_away_from_walls]: front and butt got somthing')
@@ -1845,7 +1861,7 @@ class MasterNode(Node):
                     
                     # bucket angle becomes unreliable at close range so if the bucket is close enough, just go straight
                     
-                    if any(self.laser_range[0:self.bucketFrontLeftIndex] < 0.30) or any(self.laser_range[self.bucketFrontRightIndex:] < 0.30):
+                    if any(self.laser_range[0:self.bucketFrontLeftIndex] < 0.30) or any(self.laser_range[self.bucketFrontRightIndex:] < 0.30) or np.all(np.isnan(self.laser_range[self.bucketFrontRightIndex:])) or np.all(np.isnan(self.laser_range[0:self.bucketFrontLeftIndex])):
                         anglularVel_msg.data = 0
                         self.get_logger().info('[moving_to_bucket]: too close, just moving forward')
                     else:
@@ -2339,6 +2355,10 @@ class MasterNode(Node):
 
                 self.frontierPoints.append((middle_x, middle_y))
                 
+                if self.magicState == "visiting_must_visit" and len(self.frontierPoints) > 0:
+                    self.state = self.magicState = "frontier_search"
+                    break
+                    
             if self.magicState == "visiting_must_visit":
                 # skip must visit points if its beyond MUST_VISIT_COST, other wise add to frontier points to be considered for path planning
                 for point in self.mustVisitPointsChecked_pixel:
@@ -2431,7 +2451,7 @@ class MasterNode(Node):
                 elif LAST_AT_TOP_MID:
                     self.get_logger().info('[frontierSearch]: LAST_AT_TOP_MID')
                     
-                    self.frontierPoints = list(reversed(sorted(self.frontierPoints, key=lambda point: (point[0] - (3.5 / 2) / self.map_res)**2 + (point[1] - 2.1 / self.map_res)**2)))
+                    self.frontierPoints = list(reversed(sorted(self.frontierPoints, key=lambda point: (point[0] - ((3.5 / 2) / self.map_res))**2 + (point[1] - (2.1 / self.map_res))**2 - 1000000 if (point[1] > (2.1 / self.map_res)) else (point[0] - ((3.5 / 2) / self.map_res))**2 + (point[1] - (2.1 / self.map_res))**2)))
                     
                 
             # # sort points by distance from current position
