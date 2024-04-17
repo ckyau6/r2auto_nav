@@ -10,7 +10,8 @@ class DoorHandler(Node):
         
         # IP is hardcoded (for now?)
         # self.espIP = "192.168.145.85"
-        self.espIP = "192.168.43.162"
+        # self.espIP = "192.168.43.162"
+        self.espIP = "192.168.43.73"
         
         self.httpESP = HttpESP(self.espIP)
         

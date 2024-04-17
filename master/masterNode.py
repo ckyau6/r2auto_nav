@@ -1,3 +1,5 @@
+WHITE_FLAG = False
+
 import time
 import rclpy
 from rclpy.node import Node
@@ -112,14 +114,14 @@ FINISH_LINE_M = ((LEFT_DOOR_COORDS_M[0] + RIGHT_DOOR_COORDS_M[0])/2, 2.10)
 
 # make a dot grid that spans X = 3.5 and Y = 2.1, starting from 0.2, 0.2
 # Define the start, end, and step for X and Y
-start_x, end_x, no_x = 0, 3.1, 10
-start_y, end_y, no_y = 0, 1.7, 10
+start_x, end_x, no_x = 0, 3.1, 30
+start_y, end_y, no_y = 0, 2.05, 30
 
 # Create the grid, must be last item bigges x and y
-# MUST_VISIT_POINTS_M = [(x, y) for x in np.linspace(start_x, end_x, no_x) for y in np.linspace(start_y, end_y, no_y)]
+MUST_VISIT_POINTS_M = [(x, y) for y in np.linspace(start_y, end_y, no_y) for x in np.linspace(start_x, end_x, no_x)]
 
 # all
-# MUST_VISIT_POINTS_M = [(0.00, 1.70), (0.34, 1.70), (0.69, 1.70), (1.03, 1.70), (1.38, 1.70), (1.72, 1.70), (2.07, 1.70), (2.41, 1.70), (2.76, 1.70), (3.10, 1.70),
+# MUST_VISIT_POINTS_M = [(0.00, 1.70), (0.34, 1.70), (0.69, 1.70), (1.03, 1.70), (1.38, 1.70), (1.72, 1.70), (2.07, 1.70), (2.41, 1.70), (2.76, 1.70), (3.10, 1.70), (2.7, 1.6),
 #                        (0.00, 1.51), (0.34, 1.51), (0.69, 1.51), (1.03, 1.51), (1.38, 1.51), (1.72, 1.51), (2.07, 1.51), (2.41, 1.51), (2.76, 1.51), (3.10, 1.51), 
 #                        (0.00, 1.32), (0.34, 1.32), (0.69, 1.32), (1.03, 1.32), (1.38, 1.32), (1.72, 1.32), (2.07, 1.32), (2.41, 1.32), (2.76, 1.32), (3.10, 1.32), 
 #                        (0.00, 1.13), (0.34, 1.13), (0.69, 1.13), (1.03, 1.13), (1.38, 1.13), (1.72, 1.13), (2.07, 1.13), (2.41, 1.13), (2.76, 1.13), (3.10, 1.13), 
@@ -131,16 +133,39 @@ start_y, end_y, no_y = 0, 1.7, 10
 #                        (0.00, 0.00), (0.34, 0.00), (0.69, 0.00), (1.03, 0.00), (1.38, 0.00), (1.72, 0.00), (2.07, 0.00), (2.41, 0.00), (2.76, 0.00), (3.10, 0.00)]
 
 # remove top left
-MUST_VISIT_POINTS_M = [                                          (1.03, 1.70), (1.38, 1.70), (1.72, 1.70), (2.07, 1.70), (2.41, 1.70), (2.76, 1.70), (3.10, 1.70),
-                                                                 (1.03, 1.51), (1.38, 1.51), (1.72, 1.51), (2.07, 1.51), (2.41, 1.51), (2.76, 1.51), (3.10, 1.51), 
-                                                                 (1.03, 1.32), (1.38, 1.32), (1.72, 1.32), (2.07, 1.32), (2.41, 1.32), (2.76, 1.32), (3.10, 1.32), 
-                       (0.00, 1.13), (0.34, 1.13), (0.69, 1.13), (1.03, 1.13), (1.38, 1.13), (1.72, 1.13), (2.07, 1.13), (2.41, 1.13), (2.76, 1.13), (3.10, 1.13), 
-                       (0.00, 0.94), (0.34, 0.94), (0.69, 0.94), (1.03, 0.94), (1.38, 0.94), (1.72, 0.94), (2.07, 0.94), (2.41, 0.94), (2.76, 0.94), (3.10, 0.94), 
-                       (0.00, 0.76), (0.34, 0.76), (0.69, 0.76), (1.03, 0.76), (1.38, 0.76), (1.72, 0.76), (2.07, 0.76), (2.41, 0.76), (2.76, 0.76), (3.10, 0.76), 
-                       (0.00, 0.57), (0.34, 0.57), (0.69, 0.57), (1.03, 0.57), (1.38, 0.57), (1.72, 0.57), (2.07, 0.57), (2.41, 0.57), (2.76, 0.57), (3.10, 0.57), 
-                       (0.00, 0.38), (0.34, 0.38), (0.69, 0.38), (1.03, 0.38), (1.38, 0.38), (1.72, 0.38), (2.07, 0.38), (2.41, 0.38), (2.76, 0.38), (3.10, 0.38), 
-                       (0.00, 0.19), (0.34, 0.19), (0.69, 0.19), (1.03, 0.19), (1.38, 0.19), (1.72, 0.19), (2.07, 0.19), (2.41, 0.19), (2.76, 0.19), (3.10, 0.19), 
-                       (0.00, 0.00), (0.34, 0.00), (0.69, 0.00), (1.03, 0.00), (1.38, 0.00), (1.72, 0.00), (2.07, 0.00), (2.41, 0.00), (2.76, 0.00), (3.10, 0.00)]
+# MUST_VISIT_POINTS_M = [                                          (1.03, 1.70), (1.38, 1.70), (1.72, 1.70), (2.07, 1.70), (2.41, 1.70), (2.76, 1.70), (3.10, 1.70),
+#                                                                  (1.03, 1.51), (1.38, 1.51), (1.72, 1.51), (2.07, 1.51), (2.41, 1.51), (2.76, 1.51), (3.10, 1.51), 
+#                                                                  (1.03, 1.32), (1.38, 1.32), (1.72, 1.32), (2.07, 1.32), (2.41, 1.32), (2.76, 1.32), (3.10, 1.32), 
+#                        (0.00, 1.13), (0.34, 1.13), (0.69, 1.13), (1.03, 1.13), (1.38, 1.13), (1.72, 1.13), (2.07, 1.13), (2.41, 1.13), (2.76, 1.13), (3.10, 1.13), 
+#                        (0.00, 0.94), (0.34, 0.94), (0.69, 0.94), (1.03, 0.94), (1.38, 0.94), (1.72, 0.94), (2.07, 0.94), (2.41, 0.94), (2.76, 0.94), (3.10, 0.94), 
+#                        (0.00, 0.76), (0.34, 0.76), (0.69, 0.76), (1.03, 0.76), (1.38, 0.76), (1.72, 0.76), (2.07, 0.76), (2.41, 0.76), (2.76, 0.76), (3.10, 0.76), 
+#                        (0.00, 0.57), (0.34, 0.57), (0.69, 0.57), (1.03, 0.57), (1.38, 0.57), (1.72, 0.57), (2.07, 0.57), (2.41, 0.57), (2.76, 0.57), (3.10, 0.57), 
+#                        (0.00, 0.38), (0.34, 0.38), (0.69, 0.38), (1.03, 0.38), (1.38, 0.38), (1.72, 0.38), (2.07, 0.38), (2.41, 0.38), (2.76, 0.38), (3.10, 0.38), 
+#                        (0.00, 0.19), (0.34, 0.19), (0.69, 0.19), (1.03, 0.19), (1.38, 0.19), (1.72, 0.19), (2.07, 0.19), (2.41, 0.19), (2.76, 0.19), (3.10, 0.19), 
+#                        (0.00, 0.00), (0.34, 0.00), (0.69, 0.00), (1.03, 0.00), (1.38, 0.00), (1.72, 0.00), (2.07, 0.00), (2.41, 0.00), (2.76, 0.00), (3.10, 0.00)]
+
+
+# MUST_VISIT_POINTS_M = \
+#     [(0.00, 1.70), (0.16, 1.70), (0.33, 1.70), (0.49, 1.70), (0.65, 1.70), (0.82, 1.70), (0.98, 1.70), (1.14, 1.70), (1.31, 1.70), (1.47, 1.70), (1.63, 1.70), (1.79, 1.70), (1.96, 1.70), (2.12, 1.70), (2.28, 1.70), (2.45, 1.70), (2.61, 1.70), (2.77, 1.70), (2.94, 1.70), (3.1, 1.70),
+#      (0.00, 1.61), (0.16, 1.61), (0.33, 1.61), (0.49, 1.61), (0.65, 1.61), (0.82, 1.61), (0.98, 1.61), (1.14, 1.61), (1.31, 1.61), (1.47, 1.61), (1.63, 1.61), (1.79, 1.61), (1.96, 1.61), (2.12, 1.61), (2.28, 1.61), (2.45, 1.61), (2.61, 1.61), (2.77, 1.61), (2.94, 1.61), (3.1, 1.61), 
+#      (0.00, 1.52), (0.16, 1.52), (0.33, 1.52), (0.49, 1.52), (0.65, 1.52), (0.82, 1.52), (0.98, 1.52), (1.14, 1.52), (1.31, 1.52), (1.47, 1.52), (1.63, 1.52), (1.79, 1.52), (1.96, 1.52), (2.12, 1.52), (2.28, 1.52), (2.45, 1.52), (2.61, 1.52), (2.77, 1.52), (2.94, 1.52), (3.1, 1.52), 
+#      (0.00, 1.43), (0.16, 1.43), (0.33, 1.43), (0.49, 1.43), (0.65, 1.43), (0.82, 1.43), (0.98, 1.43), (1.14, 1.43), (1.31, 1.43), (1.47, 1.43), (1.63, 1.43), (1.79, 1.43), (1.96, 1.43), (2.12, 1.43), (2.28, 1.43), (2.45, 1.43), (2.61, 1.43), (2.77, 1.43), (2.94, 1.43), (3.1, 1.43), 
+#      (0.00, 1.34), (0.16, 1.34), (0.33, 1.34), (0.49, 1.34), (0.65, 1.34), (0.82, 1.34), (0.98, 1.34), (1.14, 1.34), (1.31, 1.34), (1.47, 1.34), (1.63, 1.34), (1.79, 1.34), (1.96, 1.34), (2.12, 1.34), (2.28, 1.34), (2.45, 1.34), (2.61, 1.34), (2.77, 1.34), (2.94, 1.34), (3.1, 1.34), 
+#      (0.00, 1.25), (0.16, 1.25), (0.33, 1.25), (0.49, 1.25), (0.65, 1.25), (0.82, 1.25), (0.98, 1.25), (1.14, 1.25), (1.31, 1.25), (1.47, 1.25), (1.63, 1.25), (1.79, 1.25), (1.96, 1.25), (2.12, 1.25), (2.28, 1.25), (2.45, 1.25), (2.61, 1.25), (2.77, 1.25), (2.94, 1.25), (3.1, 1.25), 
+#      (0.00, 1.16), (0.16, 1.16), (0.33, 1.16), (0.49, 1.16), (0.65, 1.16), (0.82, 1.16), (0.98, 1.16), (1.14, 1.16), (1.31, 1.16), (1.47, 1.16), (1.63, 1.16), (1.79, 1.16), (1.96, 1.16), (2.12, 1.16), (2.28, 1.16), (2.45, 1.16), (2.61, 1.16), (2.77, 1.16), (2.94, 1.16), (3.1, 1.16), 
+#      (0.00, 1.07), (0.16, 1.07), (0.33, 1.07), (0.49, 1.07), (0.65, 1.07), (0.82, 1.07), (0.98, 1.07), (1.14, 1.07), (1.31, 1.07), (1.47, 1.07), (1.63, 1.07), (1.79, 1.07), (1.96, 1.07), (2.12, 1.07), (2.28, 1.07), (2.45, 1.07), (2.61, 1.07), (2.77, 1.07), (2.94, 1.07), (3.1, 1.07), 
+#      (0.00, 0.98), (0.16, 0.98), (0.33, 0.98), (0.49, 0.98), (0.65, 0.98), (0.82, 0.98), (0.98, 0.98), (1.14, 0.98), (1.31, 0.98), (1.47, 0.98), (1.63, 0.98), (1.79, 0.98), (1.96, 0.98), (2.12, 0.98), (2.28, 0.98), (2.45, 0.98), (2.61, 0.98), (2.77, 0.98), (2.94, 0.98), (3.1, 0.98), 
+#      (0.00, 0.89), (0.16, 0.89), (0.33, 0.89), (0.49, 0.89), (0.65, 0.89), (0.82, 0.89), (0.98, 0.89), (1.14, 0.89), (1.31, 0.89), (1.47, 0.89), (1.63, 0.89), (1.79, 0.89), (1.96, 0.89), (2.12, 0.89), (2.28, 0.89), (2.45, 0.89), (2.61, 0.89), (2.77, 0.89), (2.94, 0.89), (3.1, 0.89), 
+#      (0.00, 0.81), (0.16, 0.81), (0.33, 0.81), (0.49, 0.81), (0.65, 0.81), (0.82, 0.81), (0.98, 0.81), (1.14, 0.81), (1.31, 0.81), (1.47, 0.81), (1.63, 0.81), (1.79, 0.81), (1.96, 0.81), (2.12, 0.81), (2.28, 0.81), (2.45, 0.81), (2.61, 0.81), (2.77, 0.81), (2.94, 0.81), (3.1, 0.81), 
+#      (0.00, 0.72), (0.16, 0.72), (0.33, 0.72), (0.49, 0.72), (0.65, 0.72), (0.82, 0.72), (0.98, 0.72), (1.14, 0.72), (1.31, 0.72), (1.47, 0.72), (1.63, 0.72), (1.79, 0.72), (1.96, 0.72), (2.12, 0.72), (2.28, 0.72), (2.45, 0.72), (2.61, 0.72), (2.77, 0.72), (2.94, 0.72), (3.1, 0.72), 
+#      (0.00, 0.63), (0.16, 0.63), (0.33, 0.63), (0.49, 0.63), (0.65, 0.63), (0.82, 0.63), (0.98, 0.63), (1.14, 0.63), (1.31, 0.63), (1.47, 0.63), (1.63, 0.63), (1.79, 0.63), (1.96, 0.63), (2.12, 0.63), (2.28, 0.63), (2.45, 0.63), (2.61, 0.63), (2.77, 0.63), (2.94, 0.63), (3.1, 0.63), 
+#      (0.00, 0.54), (0.16, 0.54), (0.33, 0.54), (0.49, 0.54), (0.65, 0.54), (0.82, 0.54), (0.98, 0.54), (1.14, 0.54), (1.31, 0.54), (1.47, 0.54), (1.63, 0.54), (1.79, 0.54), (1.96, 0.54), (2.12, 0.54), (2.28, 0.54), (2.45, 0.54), (2.61, 0.54), (2.77, 0.54), (2.94, 0.54), (3.1, 0.54), 
+#      (0.00, 0.45), (0.16, 0.45), (0.33, 0.45), (0.49, 0.45), (0.65, 0.45), (0.82, 0.45), (0.98, 0.45), (1.14, 0.45), (1.31, 0.45), (1.47, 0.45), (1.63, 0.45), (1.79, 0.45), (1.96, 0.45), (2.12, 0.45), (2.28, 0.45), (2.45, 0.45), (2.61, 0.45), (2.77, 0.45), (2.94, 0.45), (3.1, 0.45), 
+#      (0.00, 0.36), (0.16, 0.36), (0.33, 0.36), (0.49, 0.36), (0.65, 0.36), (0.82, 0.36), (0.98, 0.36), (1.14, 0.36), (1.31, 0.36), (1.47, 0.36), (1.63, 0.36), (1.79, 0.36), (1.96, 0.36), (2.12, 0.36), (2.28, 0.36), (2.45, 0.36), (2.61, 0.36), (2.77, 0.36), (2.94, 0.36), (3.1, 0.36), 
+#      (0.00, 0.27), (0.16, 0.27), (0.33, 0.27), (0.49, 0.27), (0.65, 0.27), (0.82, 0.27), (0.98, 0.27), (1.14, 0.27), (1.31, 0.27), (1.47, 0.27), (1.63, 0.27), (1.79, 0.27), (1.96, 0.27), (2.12, 0.27), (2.28, 0.27), (2.45, 0.27), (2.61, 0.27), (2.77, 0.27), (2.94, 0.27), (3.1, 0.27), 
+#      (0.00, 0.18), (0.16, 0.18), (0.33, 0.18), (0.49, 0.18), (0.65, 0.18), (0.82, 0.18), (0.98, 0.18), (1.14, 0.18), (1.31, 0.18), (1.47, 0.18), (1.63, 0.18), (1.79, 0.18), (1.96, 0.18), (2.12, 0.18), (2.28, 0.18), (2.45, 0.18), (2.61, 0.18), (2.77, 0.18), (2.94, 0.18), (3.1, 0.18), 
+#      (0.00, 0.09), (0.16, 0.09), (0.33, 0.09), (0.49, 0.09), (0.65, 0.09), (0.82, 0.09), (0.98, 0.09), (1.14, 0.09), (1.31, 0.09), (1.47, 0.09), (1.63, 0.09), (1.79, 0.09), (1.96, 0.09), (2.12, 0.09), (2.28, 0.09), (2.45, 0.09), (2.61, 0.09), (2.77, 0.09), (2.94, 0.09), (3.1, 0.09), 
+#      (0.00, 0.00), (0.16, 0.00), (0.33, 0.00), (0.49, 0.00), (0.65, 0.00), (0.82, 0.00), (0.98, 0.00), (1.14, 0.00), (1.31, 0.00), (1.47, 0.00), (1.63, 0.00), (1.79, 0.00), (1.96, 0.00), (2.12, 0.00), (2.28, 0.00), (2.45, 0.00), (2.61, 0.00), (2.77, 0.00), (2.94, 0.00), (3.1, 0.00)]
 
 MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 10000
 
@@ -886,13 +911,16 @@ class MasterNode(Node):
         if ((self.state not in listStateIgnoreForObstacle) or (self.state == "maze_rotating" and self.linear_msg.data != 0)) and self.linear_msg.data != 0:
             self.get_logger().warn('[masterFSM]: self.state = %s, self.linear_msg.data = %d' % (self.state, self.linear_msg.data))
             
+            frontNotClearNav = any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+                                or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+                                or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+                                or np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:]))
             
+            buttNotClearNav = any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
+                                or np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH]))
             
             # if obstacle in front and close to both sides, rotate to move between the two
-            if any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
-                    or any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
-                    or np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
-                    or np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
+            if frontNotClearNav:
                 self.get_logger().warn('[masterFSM]: ahhh wall to close to front uwu')
                 
                 # stop
@@ -906,130 +934,141 @@ class MasterNode(Node):
                 
                 time.sleep(0.2)
                 
-                # rotate to face obstacle
-                anglularVel_msg = Int8()
+                # if both front and back are close, rotate to the clearest angle in front (which is hopefully the initial direction)
+                # else do the reverse and rotate thing
                 
-                self.rotateBack = 0
-                
-                if np.nanmin(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmin(self.laser_range[self.mazeFrontRightindex:]):
-                    anglularVel_msg.data = 100
-                    self.rotateBack = -100
+                if frontNotClearNav and buttNotClearNav: 
+                    anglularVel_msg = Int8()
+                    
+                    if np.nanmin(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmin(self.laser_range[self.mazeFrontRightindex:]):
+                        anglularVel_msg.data = -100
+                    else:
+                        anglularVel_msg.data = 100
+                        
+                    self.anglularVel_publisher.publish(anglularVel_msg)
                 else:
-                    anglularVel_msg.data = -100
-                    self.rotateBack = 100
+                    # rotate to face obstacle
+                    anglularVel_msg = Int8()
                     
-                self.anglularVel_publisher.publish(anglularVel_msg)
-                
-                start = time.time()
-                while (time.time() - start < 0.5):
-                    pass
-                
-                anglularVel_msg.data = 0
-                self.anglularVel_publisher.publish(anglularVel_msg)
-                
-                time.sleep(0.2)
-                
-                # reverse
-                self.linear_msg.data = int(-LIN_MAX / 3.2)
-                self.linear_publisher.publish(self.linear_msg)
-                start = time.time()
-                while (time.time() - start < 0.4 * 1.6) \
-                    and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
-                    and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
-                    pass
-                
-                self.linear_msg.data = 0
-                self.linear_publisher.publish(self.linear_msg)
-                
-                time.sleep(0.2)
-                
-                # rotate back to face front
-                anglularVel_msg = Int8()
-                anglularVel_msg.data = self.rotateBack
+                    self.rotateBack = 0
                     
-                self.anglularVel_publisher.publish(anglularVel_msg)
-                
-                start = time.time()
-                while (time.time() - start < 0.5):
-                    pass
-                
-                anglularVel_msg.data = 0
-                self.anglularVel_publisher.publish(anglularVel_msg)
-                
-                # ori below
-
-                # # set linear to be zero
-                # self.linear_msg.data = 0
-                # self.linear_publisher.publish(self.linear_msg)
-
-                # # set delta angle = 0 to stop
-                # deltaAngle_msg = Float64()
-                # deltaAngle_msg.data = 0.0
-                # self.deltaAngle_publisher.publish(deltaAngle_msg)
-                
-                # time.sleep(0.5)
-                
-                # # move backward for 0.5 sec as long as butt has space
-                # self.linear_msg.data = int(-LIN_MAX / 1.5)
-                # self.linear_publisher.publish(self.linear_msg)
-                # start = time.time()
-                # while (time.time() - start < 0.4*1.5) \
-                #     and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
-                #     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
-                #     pass
-                
-                # self.linear_msg.data = 0
-                # self.linear_publisher.publish(self.linear_msg)
-                
-                # anglularVel_msg = Int8()
-                
-                # # # rotate to next point if have next point else just rotate to away from the close one
-                # # if len(self.dest_y) > 1:
-                # #     target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
-                # #             180 / math.pi)
-
-                # #     deltaAngle = target_yaw - self.yaw
-
-                # #     self.get_logger().info('[masterFSM]: align to next dest: %f' % deltaAngle)
-
-                # #     self.linear_msg.data = 0
-                # #     self.linear_publisher.publish(self.linear_msg)
-
-                # #     # set delta angle to rotate to target angle
-                # #     deltaAngle_msg = Float64()
-                # #     deltaAngle_msg.data = deltaAngle * 1.0
-                # #     self.deltaAngle_publisher.publish(deltaAngle_msg)
-
-                # #     self.state = "maze_rotating"
-                
-                # # else:
-                # self.get_logger().info('[masterFSM]: rotate away from close one')
-                
-                # # rotate to away from the close one for 0.5 sec
-                # if np.nanmean(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmean(self.laser_range[self.mazeFrontRightindex:]):
-                #     anglularVel_msg.data = -120
-                # else:
-                #     anglularVel_msg.data = 120
+                    if np.nanmin(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmin(self.laser_range[self.mazeFrontRightindex:]):
+                        anglularVel_msg.data = 100
+                        self.rotateBack = -100
+                    else:
+                        anglularVel_msg.data = -100
+                        self.rotateBack = 100
+                        
+                    self.anglularVel_publisher.publish(anglularVel_msg)
                     
-                # self.anglularVel_publisher.publish(anglularVel_msg)
+                    start = time.time()
+                    while (time.time() - start < 0.5):
+                        pass
+                    
+                    anglularVel_msg.data = 0
+                    self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    time.sleep(0.2)
+                    
+                    # reverse
+                    self.linear_msg.data = int(-LIN_MAX / 3.2)
+                    self.linear_publisher.publish(self.linear_msg)
+                    start = time.time()
+                    while (time.time() - start < 0.4 * 1.6):
+                        pass
+                    
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
+                    
+                    time.sleep(0.2)
+                    
+                    # rotate back to face front
+                    anglularVel_msg = Int8()
+                    anglularVel_msg.data = self.rotateBack
+                        
+                    self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    start = time.time()
+                    while (time.time() - start < 0.5):
+                        pass
+                    
+                    anglularVel_msg.data = 0
+                    self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    # ori below
+
+                    # # set linear to be zero
+                    # self.linear_msg.data = 0
+                    # self.linear_publisher.publish(self.linear_msg)
+
+                    # # set delta angle = 0 to stop
+                    # deltaAngle_msg = Float64()
+                    # deltaAngle_msg.data = 0.0
+                    # self.deltaAngle_publisher.publish(deltaAngle_msg)
+                    
+                    # time.sleep(0.5)
+                    
+                    # # move backward for 0.5 sec as long as butt has space
+                    # self.linear_msg.data = int(-LIN_MAX / 1.5)
+                    # self.linear_publisher.publish(self.linear_msg)
+                    # start = time.time()
+                    # while (time.time() - start < 0.4*1.5) \
+                    #     and not any(self.laser_range[self.backIndexL:self.backIndexH] < NAV_TOO_CLOSE) \
+                    #     and not np.all(np.isnan(self.laser_range[self.backIndexL:self.backIndexH])):
+                    #     pass
+                    
+                    # self.linear_msg.data = 0
+                    # self.linear_publisher.publish(self.linear_msg)
+                    
+                    # anglularVel_msg = Int8()
+                    
+                    # # # rotate to next point if have next point else just rotate to away from the close one
+                    # # if len(self.dest_y) > 1:
+                    # #     target_yaw = math.atan2(self.dest_y[0] - self.boty_pixel, self.dest_x[0] - self.botx_pixel) * (
+                    # #             180 / math.pi)
+
+                    # #     deltaAngle = target_yaw - self.yaw
+
+                    # #     self.get_logger().info('[masterFSM]: align to next dest: %f' % deltaAngle)
+
+                    # #     self.linear_msg.data = 0
+                    # #     self.linear_publisher.publish(self.linear_msg)
+
+                    # #     # set delta angle to rotate to target angle
+                    # #     deltaAngle_msg = Float64()
+                    # #     deltaAngle_msg.data = deltaAngle * 1.0
+                    # #     self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                    # #     self.state = "maze_rotating"
+                    
+                    # # else:
+                    # self.get_logger().info('[masterFSM]: rotate away from close one')
+                    
+                    # # rotate to away from the close one for 0.5 sec
+                    # if np.nanmean(self.laser_range[:self.mazeFrontLeftindex]) < np.nanmean(self.laser_range[self.mazeFrontRightindex:]):
+                    #     anglularVel_msg.data = -120
+                    # else:
+                    #     anglularVel_msg.data = 120
+                        
+                    # self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    # start = time.time()
+                    # while (time.time() - start < 1):
+                    #     pass
                 
-                # start = time.time()
-                # while (time.time() - start < 1):
-                #     pass
-            
-                # anglularVel_msg.data = 0
-                # self.anglularVel_publisher.publish(anglularVel_msg)
-                
-                # # move forward for 0.5 sec and infront is nothing close
-                # self.linear_msg.data = int(LIN_MAX / 1.5)
-                # self.linear_publisher.publish(self.linear_msg)
-                # start = time.time()
-                # while (time.time() - start < 0.5 * 1.5) \
-                #     and not any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
-                #     and not any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
-                #     and not np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
-                #     and not np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
-                #     pass
+                    # anglularVel_msg.data = 0
+                    # self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    # # move forward for 0.5 sec and infront is nothing close
+                    # self.linear_msg.data = int(LIN_MAX / 1.5)
+                    # self.linear_publisher.publish(self.linear_msg)
+                    # start = time.time()
+                    # while (time.time() - start < 0.5 * 1.5) \
+                    #     and not any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
+                    #     and not any(self.laser_range[self.mazeFrontRightindex:] < NAV_TOO_CLOSE) \
+                    #     and not np.all(np.isnan(self.laser_range[:self.mazeFrontLeftindex])) \
+                    #     and not np.all(np.isnan(self.laser_range[self.mazeFrontRightindex:])):
+                    #     pass
                 
                 # get rid of point that is too close to wall in the first place and take the next one
                 # cannot take final one if its like thru a wall
@@ -1439,37 +1478,47 @@ class MasterNode(Node):
 
             elif self.doorStatus == "door1":
                 self.get_logger().info('[http_request]: door1 opened')
-                # if nav works
-                self.state = self.magicState = "go_to_left_door"
                 
-                # add a delay before read occ so that the door is fully opened
-                time.sleep(5)
-                
-                # enable occCallback
-                self.disableOCC = False
-                
-                # set newOccFlag to False
-                self.newOccFlag = False
-                
-                # if nav is still not working, put bot at centre of both door facing right door and start http_request
-                # self.state = self.magicState = "rotate_to_left_door"
+                if WHITE_FLAG == False:
+                    # if nav works
+                    self.state = self.magicState = "go_to_left_door"
+                    
+                    # add a delay before read occ so that the door is fully opened
+                    time.sleep(5)
+                    
+                    # enable occCallback
+                    self.disableOCC = False
+                    
+                    # set newOccFlag to False
+                    self.newOccFlag = False
+                else:
+                    # if nav is still not working, put bot at centre of both door facing right door and start http_request
+                    self.state = self.magicState = "rotate_to_left_door"
+                    
+                    # add a delay before read occ so that the door is fully opened
+                    time.sleep(5)
 
             elif self.doorStatus == "door2":
                 self.get_logger().info('[http_request]: door2 opened')
-                # if nav works
-                self.state = self.magicState = "go_to_right_door"
                 
-                # add a delay before read occ so that the door is fully opened
-                time.sleep(5)
-                
-                # enable occCallback
-                self.disableOCC = False
-                
-                # set newOccFlag to False
-                self.newOccFlag = False
-                
-                # if nav is still not working, put bot at centre of both door facing right door and start http_request
-                # self.state = self.magicState = "rotate_to_right_door"
+                if WHITE_FLAG == False:
+                    # if nav works
+                    self.state = self.magicState = "go_to_right_door"
+                    
+                    # add a delay before read occ so that the door is fully opened
+                    time.sleep(5)
+                    
+                    # enable occCallback
+                    self.disableOCC = False
+                    
+                    # set newOccFlag to False
+                    self.newOccFlag = False
+                else:
+                    # if nav is still not working, put bot at centre of both door facing right door and start http_request
+                    self.state = self.magicState = "rotate_to_right_door"
+                    
+                    # add a delay before read occ so that the door is fully opened
+                    time.sleep(5)
 
             elif self.doorStatus == "connection error":
                 self.get_logger().warn('[http_request]: connection error')
@@ -1589,7 +1638,7 @@ class MasterNode(Node):
             if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
                 
                 # move forwad
-                self.linear_msg.data = LIN_MAX
+                self.linear_msg.data = LIN_MAX // 2
                 self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
@@ -1628,7 +1677,7 @@ class MasterNode(Node):
             if not (any(self.laser_range[0:self.bucketFrontLeftIndex] < BUCKET_TOO_CLOSE) or any(self.laser_range[self.bucketFrontRightIndex:] < BUCKET_TOO_CLOSE)):
                 
                 # move forwad
-                self.linear_msg.data = LIN_MAX
+                self.linear_msg.data = LIN_MAX // 2
                 self.linear_publisher.publish(self.linear_msg)
                 
                 # set delta angle = 0 to stop
@@ -1746,7 +1795,7 @@ class MasterNode(Node):
                         self.get_logger().info('[rotating_to_move_away_from_walls]: butt is still near! go forward')
 
                         # set linear to be self.linear_speed to move forward fastest
-                        self.linear_msg.data = LIN_MAX
+                        self.linear_msg.data = LIN_MAX // 2
                         self.linear_publisher.publish(self.linear_msg)
 
                         anglularVel_msg = Int8()
@@ -1949,6 +1998,8 @@ class MasterNode(Node):
                     # set linear to be zero
                     self.linear_msg.data = 0
                     self.linear_publisher.publish(self.linear_msg)
+                    
+                    time.sleep(1)
 
                     # set delta angle = bucketAngle
                     deltaAngle_msg = Float64()
@@ -1961,6 +2012,8 @@ class MasterNode(Node):
                     # set linear to be zero
                     self.linear_msg.data = 0
                     self.linear_publisher.publish(self.linear_msg)
+                    
+                    time.sleep(1)
 
                     # set delta angle = bucketAngle -360
                     deltaAngle_msg = Float64()
@@ -1973,6 +2026,8 @@ class MasterNode(Node):
                     # set linear to be zero
                     self.linear_msg.data = 0
                     self.linear_publisher.publish(self.linear_msg)
+                    
+                    time.sleep(1)
 
                     # set delta angle = 90
                     deltaAngle_msg = Float64()
@@ -2010,10 +2065,10 @@ class MasterNode(Node):
                         self.get_logger().info('[moving_to_bucket]: too close, just moving forward')
                     else:
                         if self.bucketAngle > 5 and self.bucketAngle < 180:
-                            anglularVel_msg.data = 100 // 2
+                            anglularVel_msg.data = 64
                             self.get_logger().info('[moving_to_bucket]: moving forward and left')
                         elif self.bucketAngle < 355 and self.bucketAngle > 180:
-                            anglularVel_msg.data = -100 // 2
+                            anglularVel_msg.data = -64
                             self.get_logger().info('[moving_to_bucket]: moving forward and right')
                         else:
                             anglularVel_msg.data = 0

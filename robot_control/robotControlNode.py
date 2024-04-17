@@ -11,7 +11,8 @@ import cmath
 max_linear_speed = 0.22
 
 # max_angle_speed = 0.5  # anglularVel is in __???
-max_angle_speed = 1  # anglularVel is in __???
+# max_angle_speed = 1  # anglularVel is in __???
+max_angle_speed = 0.8  # anglularVel is in __???
 
 
 # return the rotation angle around z axis in radians (counterclockwise)
