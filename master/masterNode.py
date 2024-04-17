@@ -540,11 +540,11 @@ class MasterNode(Node):
                 if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
                     self.oriorimap[ny][nx] = 100
 
-            # for i in range(-4, 41):
-            #     ny = self.magicOriginy_pixel + i
-            #     nx = self.magicOriginx_pixel - 4
-            #     if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
-            #         self.oriorimap[ny][nx] = 100
+            for i in range(-4, 41):
+                ny = self.magicOriginy_pixel + i
+                nx = self.magicOriginx_pixel - 4
+                if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+                    self.oriorimap[ny][nx] = 100
 
             for i in range(-4, 41):
                 ny = self.magicOriginy_pixel + i
