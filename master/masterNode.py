@@ -527,6 +527,43 @@ class MasterNode(Node):
             # Convert the OccupancyGrid to a numpy array
             self.oriorimap = np.array(msg.data, dtype=np.float32).reshape(msg.info.height, msg.info.width)
 
+            # hardcode
+            for i in range(-3, 9):
+                ny = self.magicOriginy_pixel + 4
+                nx = self.magicOriginx_pixel + i
+                if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+                    self.oriorimap[ny][nx] = 100
+
+            for i in range(-3, 70):
+                ny = self.magicOriginy_pixel - 4
+                nx = self.magicOriginx_pixel + i
+                if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+                    self.oriorimap[ny][nx] = 100
+
+            # for i in range(-4, 41):
+            #     ny = self.magicOriginy_pixel + i
+            #     nx = self.magicOriginx_pixel - 4
+            #     if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+            #         self.oriorimap[ny][nx] = 100
+
+            for i in range(-4, 41):
+                ny = self.magicOriginy_pixel + i
+                nx = self.magicOriginx_pixel + 70
+                if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+                    self.oriorimap[ny][nx] = 100
+
+            # for i in range(-3, 24):
+            #     ny = self.magicOriginy_pixel + 40
+            #     nx = self.magicOriginx_pixel + i
+            #     if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+            #         self.oriorimap[ny][nx] = 100
+            #
+            # for i in range(40, 70):
+            #     ny = self.magicOriginy_pixel + 40
+            #     nx = self.magicOriginx_pixel + i
+            #     if 0 <= ny < self.map_h and 0 <= nx < self.map_w:
+            #         self.oriorimap[ny][nx] = 100
+
             # this converts the occupancy grid to an 1d array of map, umpapped, occupied
             occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count',
                                                                     bins=occ_bins)
