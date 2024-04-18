@@ -35,9 +35,9 @@ UNMAPPED = 1
 OPEN = 2
 OBSTACLE = 3
 
-# occ_bins = [-1, 0, 50, 100]
-occ_bins = [-1, 0, 50-5, 50+5, 100]
-labels = [UNMAPPED, OPEN, UNMAPPED, OBSTACLE]
+occ_bins = [-1, 0, 50, 100]
+# occ_bins = [-1, 0, 50-5, 50+5, 100]
+# labels = [UNMAPPED, OPEN, UNMAPPED, OBSTACLE]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
@@ -116,8 +116,8 @@ FINISH_LINE_M = ((LEFT_DOOR_COORDS_M[0] + RIGHT_DOOR_COORDS_M[0])/2, 2.10)
 
 # make a dot grid that spans X = 3.5 and Y = 2.1, starting from 0.2, 0.2
 # Define the start, end, and step for X and Y
-start_x, end_x, no_x = 0, 3.1, 30
-start_y, end_y, no_y = 0, 2.05, 30
+start_x, end_x, no_x = 0, 3.1, 20
+start_y, end_y, no_y = 0, 2.05, 20
 
 # Create the grid, must be last item bigges x and y
 MUST_VISIT_POINTS_M = [(x, y) for y in np.linspace(start_y, end_y, no_y) for x in np.linspace(start_x, end_x, no_x)]
@@ -169,7 +169,7 @@ MUST_VISIT_POINTS_M = [(x, y) for y in np.linspace(start_y, end_y, no_y) for x i
 #      (0.00, 0.09), (0.16, 0.09), (0.33, 0.09), (0.49, 0.09), (0.65, 0.09), (0.82, 0.09), (0.98, 0.09), (1.14, 0.09), (1.31, 0.09), (1.47, 0.09), (1.63, 0.09), (1.79, 0.09), (1.96, 0.09), (2.12, 0.09), (2.28, 0.09), (2.45, 0.09), (2.61, 0.09), (2.77, 0.09), (2.94, 0.09), (3.1, 0.09), 
 #      (0.00, 0.00), (0.16, 0.00), (0.33, 0.00), (0.49, 0.00), (0.65, 0.00), (0.82, 0.00), (0.98, 0.00), (1.14, 0.00), (1.31, 0.00), (1.47, 0.00), (1.63, 0.00), (1.79, 0.00), (1.96, 0.00), (2.12, 0.00), (2.28, 0.00), (2.45, 0.00), (2.61, 0.00), (2.77, 0.00), (2.94, 0.00), (3.1, 0.00)]
 
-MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 10000
+MUST_VISIT_COST = FRONTIER_SKIP_THRESHOLD * 10
 
 # speedssss
 LIN_MAX = 110
@@ -360,7 +360,7 @@ class MasterNode(Node):
         # constants
         # self.linear_speed = 100
         # self.yaw_offset = 0
-        self.recalc_freq = 10  # frequency to recalculate target angle and fix direction (10 means every one second)
+        self.recalc_freq = 2  # frequency to recalculate target angle and fix direction (10 means every one second)
         self.recalc_stat = 0
 
         self.path_recalc_freq = 20
@@ -595,14 +595,14 @@ class MasterNode(Node):
             occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count',
                                                                     bins=occ_bins)
             
-            # Map the bin numbers to the desired labels
-            correctedBin = np.array([labels[i-1] for i in binnum])
+            # # Map the bin numbers to the desired labels
+            # correctedBin = np.array([labels[i-1] for i in binnum])
 
             # reshape to 2D array
             # 1 = unmapped
             # 2 = mapped and open
             # 3 = mapped and obstacle
-            self.occupancyMap = np.uint8(correctedBin.reshape(msg.info.height, msg.info.width))
+            self.occupancyMap = np.uint8(binnum.reshape(msg.info.height, msg.info.width))
             
             # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
             # pixelExpend = numbers of pixel to expend by
@@ -628,12 +628,16 @@ class MasterNode(Node):
             
             # check if must visit poiints are in the map if yes then:
             # if must visit points are not unmapped, then remove them
-            self.mustVisitPointsChecked_pixel = [(x, y) for x, y in self.mustVisitPoints_pixel if not (0 < x < self.map_w and 0 < y < self.map_h and (self.dilutedOccupancyMap[y][x] == OPEN or self.dilutedOccupancyMap[y][x] == OBSTACLE))]
+            # self.mustVisitPointsChecked_pixel = [(x, y) for x, y in self.mustVisitPoints_pixel if not (0 < x < self.map_w and 0 < y < self.map_h and (self.dilutedOccupancyMap[y][x] == OPEN or self.dilutedOccupancyMap[y][x] == OBSTACLE))]
             
-            # for x, y in self.mustVisitPoints_pixel:
-            #     if (not (0 < x < self.map_w and 0 < y < self.map_h)):
-            #         if (self.oriorimap[y][x] == -1 or 20 < self.oriorimap[y][x] < 80):
-            #             self.mustVisitPointsChecked_pixel.append((x, y))
+            self.mustVisitPointsChecked_pixel = []
+            
+            for x, y in self.mustVisitPoints_pixel:
+                # if within map
+                if 0 < x < self.map_w and 0 < y < self.map_h:
+                    # if unmapped or unsure wall or obstacle
+                    if (self.oriorimap[y][x] == -1 or 50 - 1 < self.oriorimap[y][x] < 50 + 1):
+                        self.mustVisitPointsChecked_pixel.append((x, y))
             
             # Normalize the values to the range [0, 1]
             # self.oriorimap /= 100.0
@@ -918,7 +922,7 @@ class MasterNode(Node):
                 
         # special case for maze_rotating
         # if moving then need to check for obstacle, else rotate on spot no need to check
-        if ((self.state not in listStateIgnoreForObstacle) or (self.state == "maze_rotating" and self.linear_msg.data != 0)) and self.linear_msg.data != 0:
+        if ((self.state not in listStateIgnoreForObstacle) or (self.state == "maze_rotating" and self.linear_msg.data != 0)) and self.linear_msg.data != 0 and self.disableOCC != False:
             self.get_logger().warn('[masterFSM]: self.state = %s, self.linear_msg.data = %d' % (self.state, self.linear_msg.data))
             
             frontNotClearNav = any(self.laser_range[:self.mazeFrontLeftindex] < NAV_TOO_CLOSE) \
@@ -947,6 +951,59 @@ class MasterNode(Node):
                 # if both front and back are close, rotate to the clearest angle in front (which is hopefully the initial direction)
                 # else do the reverse and rotate thing
                 
+                # if next dest (of old path) is not in the direciton of wall, ie infront, no need reverse just send to rotate to face new path
+                # if len(self.dest_y) > 2:
+                #     target_yaw = math.atan2(self.dest_y[1] - self.boty_pixel, self.dest_x[1] - self.botx_pixel) * (
+                #             180 / math.pi)
+
+                #     deltaAngle = target_yaw - self.yaw
+                    
+                #     if abs(deltaAngle) > MAZE_FRONT_RANGE:
+
+                #         # self.get_logger().info('[masterFSM]: align to next dest: %f' % deltaAngle)
+
+                #         # self.linear_msg.data = 0
+                #         # self.linear_publisher.publish(self.linear_msg)
+
+                #         # # set delta angle to rotate to target angle
+                #         # deltaAngle_msg = Float64()
+                #         # deltaAngle_msg.data = deltaAngle * 1.0
+                #         # self.deltaAngle_publisher.publish(deltaAngle_msg)
+
+                #         # self.state = "maze_rotating"
+                        
+                #         # get rid of point that is too close to wall in the first place and take the next one
+                #         # cannot take final one if its like thru a wall
+                        
+                        
+                #         # reverse
+                #         self.linear_msg.data = int(-LIN_MAX / 3.2)
+                #         self.linear_publisher.publish(self.linear_msg)
+                #         start = time.time()
+                #         while (time.time() - start < 0.4 * 1.6):
+                #             pass
+                        
+                #         self.linear_msg.data = 0
+                #         self.linear_publisher.publish(self.linear_msg)
+                        
+                #         time.sleep(0.2)
+                        
+                #         self.dest_x.clear()
+                #         self.dest_y.clear()
+                        
+                #         self.get_logger().warn('[masterFSM]: get back to magicState: %s' % self.magicState)
+                #         self.state = self.magicState
+                        
+                #         # enable occCallback
+                #         self.disableOCC = False
+                        
+                #         # set newOccFlag to False
+                #         self.newOccFlag = False
+                        
+                #         self.get_logger().info('[masterFSM]: setting newOccFlag: %s, disableOCC: %s' % (str(self.newOccFlag), str(self.disableOCC)))
+                        
+                #         return
+                
                 if frontNotClearNav and buttNotClearNav: 
                     anglularVel_msg = Int8()
                     
@@ -956,6 +1013,27 @@ class MasterNode(Node):
                         anglularVel_msg.data = 100
                         
                     self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    start = time.time()
+                    while (time.time() - start < 0.5):
+                        pass
+                    
+                    anglularVel_msg.data = 0
+                    self.anglularVel_publisher.publish(anglularVel_msg)
+                    
+                    time.sleep(0.2)
+                    
+                    # reverse
+                    self.linear_msg.data = int(-LIN_MAX / 3.2)
+                    self.linear_publisher.publish(self.linear_msg)
+                    start = time.time()
+                    while (time.time() - start < 0.4 * 1.6):
+                        pass
+                    
+                    self.linear_msg.data = 0
+                    self.linear_publisher.publish(self.linear_msg)
+                    
+                    time.sleep(0.2)
                 else:
                     # rotate to face obstacle
                     anglularVel_msg = Int8()
@@ -1301,7 +1379,7 @@ class MasterNode(Node):
                 # else, rotate and move at the same time
                 if abs(deltaAngle) < 15:
                     pass
-                elif abs(deltaAngle) >= 45:
+                elif abs(deltaAngle) >= 30:
                     # set linear
                     self.linear_msg.data = 0
                     self.linear_publisher.publish(self.linear_msg)
@@ -2307,7 +2385,7 @@ class MasterNode(Node):
         
         # if deltaAngle is too big, stop then rotate
         # else, rotate and move at the same time
-        if abs(target_yaw - self.yaw) >= 45:
+        if abs(target_yaw - self.yaw) >= 30:
             # set linear
             self.linear_msg.data = 0
             self.linear_publisher.publish(self.linear_msg)
