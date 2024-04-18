@@ -2305,6 +2305,9 @@ class MasterNode(Node):
             # set linear
             self.linear_msg.data = LIN_WHEN_ROTATING
             self.linear_publisher.publish(self.linear_msg)
+            
+        # wait abit first
+        time.sleep(0.5)
 
         # set delta angle to rotate to target angle
         deltaAngle = Float64()
