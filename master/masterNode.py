@@ -31,7 +31,13 @@ import cv2
 # used to convert the occupancy grid to an image of map, umpapped, occupied
 import scipy.stats
 
-occ_bins = [-1, 0, 50, 100]
+UNMAPPED = 1
+OPEN = 2
+OBSTACLE = 3
+
+# occ_bins = [-1, 0, 50, 100]
+occ_bins = [-1, 0, 50-5, 50+5, 100]
+labels = [UNMAPPED, OPEN, UNMAPPED, OBSTACLE]
 
 # CLEARANCE_RADIUS is in cm, used to dilate the obstacles
 # radius of turtle bot is around 11 cm
@@ -69,10 +75,6 @@ MAZE_FRONT_RIGHT_ANGLE = 360 - MAZE_FRONT_RANGE
 
 MAZE_CLEARANCE_ANGLE = 10
 MAZE_ROTATE_SPEED = 64
-
-UNMAPPED = 1
-OPEN = 2
-OBSTACLE = 3
 
 # this is for path finder to ignore close points, in pixels
 # RADIUS_OF_IGNORE = 3
@@ -592,12 +594,15 @@ class MasterNode(Node):
             # this converts the occupancy grid to an 1d array of map, umpapped, occupied
             occ_counts, edges, binnum = scipy.stats.binned_statistic(np.array(msg.data), np.nan, statistic='count',
                                                                     bins=occ_bins)
+            
+            # Map the bin numbers to the desired labels
+            correctedBin = np.array([labels[i-1] for i in binnum])
 
             # reshape to 2D array
             # 1 = unmapped
             # 2 = mapped and open
             # 3 = mapped and obstacle
-            self.occupancyMap = np.uint8(binnum.reshape(msg.info.height, msg.info.width))
+            self.occupancyMap = np.uint8(correctedBin.reshape(msg.info.height, msg.info.width))
             
             # then convert to grid pixel by dividing map_res in m/cell, +0.5 to round up
             # pixelExpend = numbers of pixel to expend by
@@ -624,6 +629,11 @@ class MasterNode(Node):
             # check if must visit poiints are in the map if yes then:
             # if must visit points are not unmapped, then remove them
             self.mustVisitPointsChecked_pixel = [(x, y) for x, y in self.mustVisitPoints_pixel if not (0 < x < self.map_w and 0 < y < self.map_h and (self.dilutedOccupancyMap[y][x] == OPEN or self.dilutedOccupancyMap[y][x] == OBSTACLE))]
+            
+            # for x, y in self.mustVisitPoints_pixel:
+            #     if (not (0 < x < self.map_w and 0 < y < self.map_h)):
+            #         if (self.oriorimap[y][x] == -1 or 20 < self.oriorimap[y][x] < 80):
+            #             self.mustVisitPointsChecked_pixel.append((x, y))
             
             # Normalize the values to the range [0, 1]
             # self.oriorimap /= 100.0
