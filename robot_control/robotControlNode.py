@@ -8,8 +8,11 @@ import math
 import cmath
 
 # constants
-max_linear_speed = 0.1
-max_angle_speed = 0.5  # anglularVel is in __???
+max_linear_speed = 0.22
+
+# max_angle_speed = 0.5  # anglularVel is in __???
+# max_angle_speed = 1  # anglularVel is in __???
+max_angle_speed = 0.8  # anglularVel is in __???
 
 
 # return the rotation angle around z axis in radians (counterclockwise)
@@ -46,20 +49,21 @@ class RobotControlNode(Node):
         self.targetAngle = 0
         self.currentYaw = 0
         
+        self.curveState = 0
+        
         ''' ================================================ robotControlNode_state_feedback ================================================ '''
         # Create a publisher for robotControlNode_state_feedback
         self.publisherFB = self.create_publisher(String, 'robotControlNode_state_feedback', 10)
         publisher_period = 0.1  # seconds
         self.publisherFBTimer = self.create_timer(publisher_period, self.publisher_callback_state_feedback)
 
-        ''' ================================================ odometry ================================================ '''
-        # Create a subscriber to the topic "odom"
-        self.odom_subscription = self.create_subscription(
-            Odometry,
-            'odom',
-            self.odom_callback,
+        ''' ================================================ robot position ================================================ '''
+        # Create a subscriber to the topic
+        self.pos_subscription = self.create_subscription(
+            Pose,
+            'position',
+            self.pos_callback,
             10)
-        self.odom_subscription  # prevent unused variable warning
         self.yaw = 0
 
         ''' ================================================ cmd_linear ================================================ '''
@@ -93,12 +97,22 @@ class RobotControlNode(Node):
             'cmd_deltaAngle',
             self.deltaAngle_callback,
             10)
+        
+        ''' ================================================ boolCurve ================================================ '''
+        # Create a subscriber to the topic "boolCurve"
+        # boolCurve is a Int8, 0 is false, 1 is true
+        self.angle_subscription = self.create_subscription(
+            Int8,
+            'boolCurve',
+            self.boolCurve_callback,
+            10)
 
         self.get_logger().info("robotControlNode has started! :D")
 
-    def odom_callback(self, msg):
-        orientation_quat = msg.pose.pose.orientation
+    def pos_callback(self, msg):
+        orientation_quat = msg.orientation
         self.yaw = angle_from_quaternion(orientation_quat.x, orientation_quat.y, orientation_quat.z, orientation_quat.w)
+        self.get_logger().info("[pos_callback]: %f" % math.degrees(self.yaw))
 
     def linear_callback(self, msg):
         # -1 to -127    ==> 0% to -100% of the maximum speed
@@ -110,6 +124,10 @@ class RobotControlNode(Node):
         else:
             self.linearVel = (msg.data / 127.0) * max_linear_speed
             self.get_logger().info("linear_callback: with msg %d and speed: %f" % (msg.data, self.linearVel))  
+            
+            # to stop curving
+            if self.curveState == 0:
+                self.state = "rotateStop"
             
     def anglularVel_callback(self, msg):
         # -1 to -127    ==> 0% to -100% of the maximum speed, -ve is clockwise
@@ -125,6 +143,10 @@ class RobotControlNode(Node):
             
             # discard anything from deltaAngle_callback
             self.targetYaw = self.currentYaw
+            
+            # to stop curving
+            if self.curveState == 0:
+                self.linearVel = 0.0
 
     def deltaAngle_callback(self, msg): 
         # Create a subscriber to the topic "cmd_deltaAngle"
@@ -158,6 +180,18 @@ class RobotControlNode(Node):
             
             # discard anything from anglularVel_callback
             self.angleVel = 0.0
+            
+            # to stop curving
+            if self.curveState == 0:
+                self.linearVel = 0.0
+            
+    def boolCurve_callback(self, msg):
+        if msg.data == 0:
+            self.curveState = 0
+        else:
+            self.curveState = 1
+            
+        self.get_logger().info("boolCurve_callback: %d" % self.curveState)
             
     def rotatebot(self):
         if self.state == "rotateStop":

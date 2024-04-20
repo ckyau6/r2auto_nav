@@ -9,7 +9,10 @@ class DoorHandler(Node):
         super().__init__('doorRequestNode')
         
         # IP is hardcoded (for now?)
-        self.espIP = "192.168.43.73"
+        self.espIP = "192.168.145.85"
+        # self.espIP = "192.168.43.162"
+        # self.espIP = "192.168.43.73"
+        
         self.httpESP = HttpESP(self.espIP)
         
         # Create a subscriber to the topic "doorRequest"

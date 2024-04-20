@@ -201,7 +201,7 @@ class BucketFinderHandler(Node):
         argmin = np.nanargmin(self.laser_range)
         lineAngle = np.empty(10)
         lineAngle.fill(self.index_to_angle(argmin, len(self.laser_range))*np.pi/180)
-        plt.polar(lineAngle, line, label='bucket_angle')
+        plt.polar(lineAngle, line, label='min_dist_angle')
         
         plt.legend()
         
